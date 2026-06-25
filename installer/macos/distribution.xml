@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+  <title>GoNails PAX Agent</title>
+  <organization>com.gonails</organization>
+  <domains enable_localSystem="true"/>
+
+  <welcome    file="welcome.html"    mime-type="text/html"/>
+  <conclusion file="conclusion.html" mime-type="text/html"/>
+
+  <!-- Require macOS 11 (Big Sur) or later. -->
+  <volume-check>
+    <allowed-os-versions>
+      <os-version min="11.0"/>
+    </allowed-os-versions>
+  </volume-check>
+
+  <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
+
+  <choices-outline>
+    <line choice="default">
+      <line choice="com.gonails.paxagent.pkg"/>
+    </line>
+  </choices-outline>
+
+  <choice id="default"/>
+  <choice id="com.gonails.paxagent.pkg" visible="false">
+    <pkg-ref id="com.gonails.paxagent.pkg"/>
+  </choice>
+
+  <pkg-ref id="com.gonails.paxagent.pkg" version="0.3.6" auth="root">component.pkg</pkg-ref>
+</installer-gui-script>

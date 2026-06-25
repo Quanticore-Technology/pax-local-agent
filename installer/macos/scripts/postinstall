@@ -1,0 +1,55 @@
+#!/bin/bash
+# Runs AFTER files are copied. Installs the LaunchDaemon plist, sets perms,
+# loads the service, then opens the web UI for the user to fill in setup.
+#
+# v0.2+ — config is now done via the bundled "GoNails PAX Agent.app" web UI
+# instead of osascript dialogs at install time. Service starts in
+# "setup-required" state if no config exists; opening the app reveals the
+# setup form.
+set -e
+
+BIN="/usr/local/bin/pax-agent"
+CONFIG_DIR="/Library/Application Support/GoNails/PaxAgent"
+CONFIG="$CONFIG_DIR/config.json"
+PLIST_SRC_BUNDLED="$CONFIG_DIR/com.gonails.paxagent.plist"
+PLIST_DST="/Library/LaunchDaemons/com.gonails.paxagent.plist"
+APP="/Applications/GoNails PAX Agent.app"
+
+# Move bundled plist into LaunchDaemons location.
+if [ -f "$PLIST_SRC_BUNDLED" ]; then
+  mv "$PLIST_SRC_BUNDLED" "$PLIST_DST"
+  chown root:wheel "$PLIST_DST"
+  chmod 644 "$PLIST_DST"
+fi
+
+chmod 755 "$BIN"
+
+# .app launcher must be executable.
+if [ -d "$APP" ]; then
+  chmod 755 "$APP/Contents/MacOS/launcher"
+fi
+
+# (Re)load the daemon — RunAtLoad in the plist starts it immediately.
+echo "Starting pax-agent service..."
+/bin/launchctl load "$PLIST_DST"
+
+# Wait briefly for the web server to come up.
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if curl -sf -o /dev/null --max-time 1 http://127.0.0.1:9876/health; then
+    break
+  fi
+  sleep 1
+done
+
+# Decide what to tell the user.
+if [ -f "$CONFIG" ]; then
+  osascript -e 'display notification "Agent updated and running. Open the GoNails PAX Agent app to verify." with title "GoNails PAX Agent" sound name "Glass"' >/dev/null 2>&1 || true
+else
+  # First install — open the app so the user lands on the setup form immediately.
+  if [ -d "$APP" ]; then
+    /usr/bin/open "$APP" || true
+  fi
+  osascript -e 'display notification "Open the GoNails PAX Agent app to finish setup." with title "GoNails PAX Agent" sound name "Glass"' >/dev/null 2>&1 || true
+fi
+
+exit 0

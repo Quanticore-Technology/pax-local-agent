@@ -1,0 +1,25 @@
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system; font-size: 13px; padding: 16px;">
+  <h2 style="margin-top:0;">✓ Installation complete</h2>
+
+  <p>The agent is running as a background service and will auto-start every
+  boot. You should see <b>"Online"</b> in the dashboard within a few seconds.</p>
+
+  <h3>Verify</h3>
+  <pre style="background:#f4f4f4; padding:8px;">curl http://127.0.0.1:9876/health</pre>
+
+  <h3>Common operations</h3>
+  <ul>
+    <li><b>Re-run setup</b> (e.g. PAX got a new IP):<br>
+        <code>sudo /usr/local/bin/pax-agent setup</code><br>
+        Then: <code>sudo launchctl kickstart -k system/com.gonails.paxagent</code></li>
+    <li><b>View logs:</b><br>
+        <code>tail -f /Library/Logs/GoNails/PaxAgent/agent.log</code></li>
+    <li><b>Uninstall:</b><br>
+        <code>sudo bash /usr/local/share/pax-agent/uninstall.sh</code></li>
+  </ul>
+
+  <p style="color:#888;">Need help? Contact support with your Office ID.</p>
+</body>
+</html>

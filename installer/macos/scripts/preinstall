@@ -1,0 +1,26 @@
+#!/bin/bash
+# Runs BEFORE files are copied. Used for clean upgrade: stop the running
+# LaunchDaemon so we can replace its binary.
+set -e
+
+PLIST="/Library/LaunchDaemons/com.gonails.paxagent.plist"
+
+if [ -f "$PLIST" ]; then
+  echo "Stopping existing pax-agent service..."
+  /bin/launchctl unload "$PLIST" 2>/dev/null || true
+fi
+
+# Ensure log dir exists with permissions before stdout/stderr files are touched.
+mkdir -p "/Library/Logs/GoNails/PaxAgent"
+chown -R nobody:nobody "/Library/Logs/GoNails/PaxAgent"
+chmod 750 "/Library/Logs/GoNails/PaxAgent"
+
+# Ensure config dir exists. Owned by `nobody` so the daemon (which drops to
+# that user via the LaunchDaemon plist) can atomic-write its own config when
+# the salon saves changes through the web UI. Without this, writeConfig()
+# fails with EACCES on the .tmp staging file.
+mkdir -p "/Library/Application Support/GoNails/PaxAgent"
+chown -R nobody:nobody "/Library/Application Support/GoNails/PaxAgent"
+chmod 750 "/Library/Application Support/GoNails/PaxAgent"
+
+exit 0

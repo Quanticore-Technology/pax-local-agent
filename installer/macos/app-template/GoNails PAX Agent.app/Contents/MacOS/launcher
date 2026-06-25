@@ -1,0 +1,18 @@
+#!/bin/bash
+# Tiny launcher: opens the config UI in the default browser.
+# The actual agent runs as a LaunchDaemon (com.gonails.paxagent), not from this app.
+URL="http://127.0.0.1:9876/"
+
+# If the daemon isn't responding (just installed, slow boot, crashed), give it
+# 5 s before failing. Most cases the page just opens immediately.
+for i in 1 2 3 4 5; do
+  if curl -sf -o /dev/null --max-time 1 "$URL"; then
+    open "$URL"
+    exit 0
+  fi
+  sleep 1
+done
+
+# Daemon not responding — show a Mac-native alert with a help hint.
+osascript -e 'display alert "PAX Agent service not running" message "The background service did not respond on http://127.0.0.1:9876.\n\nTry restarting it from Terminal:\n  sudo launchctl kickstart -k system/com.gonails.paxagent\n\nOr check logs:\n  /Library/Logs/GoNails/PaxAgent/" as critical' >/dev/null 2>&1
+exit 1

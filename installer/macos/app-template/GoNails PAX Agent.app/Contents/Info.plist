@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key>
+  <string>GoNails PAX Agent</string>
+  <key>CFBundleDisplayName</key>
+  <string>GoNails PAX Agent</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.gonails.paxagent.app</string>
+  <key>CFBundleVersion</key>
+  <string>0.3.1</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.3.1</string>
+  <key>CFBundleExecutable</key>
+  <string>launcher</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <!-- Hide Dock icon — the launcher is fire-and-forget. -->
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>© 2026 GoNails</string>
+</dict>
+</plist>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.gonails.paxagent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/pax-agent</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PAX_AGENT_CONFIG</key>
+    <string>/Library/Application Support/GoNails/PaxAgent/config.json</string>
+    <key>PAX_AGENT_LOG_DIR</key>
+    <string>/Library/Logs/GoNails/PaxAgent</string>
+    <!-- Cloud backend HTTPS base URL the agent uses for first-time pairing.
+         Replaced at build time by installer/macos/build.sh based on the
+         BOOTSTRAP_URL env (defaults to localhost for dev). -->
+    <key>PAX_AGENT_BOOTSTRAP_URL</key>
+    <string>__BOOTSTRAP_URL__</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Library/Logs/GoNails/PaxAgent/stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Library/Logs/GoNails/PaxAgent/stderr.log</string>
+
+  <key>UserName</key>
+  <string>nobody</string>
+
+  <key>GroupName</key>
+  <string>nobody</string>
+</dict>
+</plist>

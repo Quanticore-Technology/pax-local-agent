@@ -1,0 +1,46 @@
+{
+  "name": "@gonails/pax-agent",
+  "version": "0.3.6",
+  "description": "On-prem relay agent: cloud backend → local PAX A920 over POSLink",
+  "private": true,
+  "main": "dist/index.js",
+  "bin": {
+    "pax-agent": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "setup": "ts-node src/index.ts setup",
+    "test": "jest",
+    "lint": "eslint \"src/**/*.ts\"",
+    "pkg:macos:arm64": "yarn build && yao-pkg dist/index.js --targets node20-macos-arm64 --output installer/macos/dist/pax-agent",
+    "pkg:macos:x64":   "yarn build && yao-pkg dist/index.js --targets node20-macos-x64   --output installer/macos/dist/pax-agent-x64",
+    "pkg:win:x64":     "yarn build && yao-pkg dist/index.js --targets node20-win-x64     --output installer/windows/build/staging/pax-agent.exe",
+    "installer:macos":   "bash installer/macos/build.sh",
+    "installer:windows": "bash installer/windows/build.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pino": "^9.5.0",
+    "uuid": "^9.0.1",
+    "ws": "^8.17.1"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.12.0",
+    "@types/uuid": "^9.0.8",
+    "@types/ws": "^8.5.10",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0",
+    "@yao-pkg/pkg": "^6.6.0"
+  },
+  "pkg": {
+    "scripts": ["dist/**/*.js"],
+    "assets": ["package.json"]
+  }
+}

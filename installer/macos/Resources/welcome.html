@@ -1,0 +1,28 @@
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system; font-size: 13px; padding: 16px;">
+  <h2 style="margin-top:0;">GoNails PAX Agent</h2>
+  <p>This installer sets up the on-prem relay agent that connects your salon's
+  PAX A920 payment terminal to the GoNails cloud POS.</p>
+
+  <h3>What this installs</h3>
+  <ul>
+    <li><b>Binary:</b> <code>/usr/local/bin/pax-agent</code></li>
+    <li><b>Service:</b> <code>com.gonails.paxagent</code> (auto-starts at boot)</li>
+    <li><b>Config:</b> <code>/Library/Application Support/GoNails/PaxAgent/</code></li>
+    <li><b>Logs:</b> <code>/Library/Logs/GoNails/PaxAgent/</code></li>
+  </ul>
+
+  <h3>Before you continue</h3>
+  <p>Have ready, from the cloud dashboard
+  (<i>Settings → Payment Device → PAX Agent → Generate Token</i>):</p>
+  <ol>
+    <li>Office ID</li>
+    <li>Agent ID</li>
+    <li>Agent Token (starts with <code>pat_</code>)</li>
+    <li>The PAX A920 device's IP on the salon LAN</li>
+  </ol>
+
+  <p style="color:#888;">Administrator privileges are required.</p>
+</body>
+</html>
