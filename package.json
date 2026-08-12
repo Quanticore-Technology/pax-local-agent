@@ -1,6 +1,6 @@
 {
   "name": "@gonails/pax-agent",
-  "version": "0.3.6",
+  "version": "0.4.0",
   "description": "On-prem relay agent: cloud backend → local PAX A920 over POSLink",
   "private": true,
   "main": "dist/index.js",
@@ -15,9 +15,9 @@
     "test": "jest",
     "lint": "eslint \"src/**/*.ts\"",
     "pkg:macos:arm64": "yarn build && yao-pkg dist/index.js --targets node20-macos-arm64 --output installer/macos/dist/pax-agent",
-    "pkg:macos:x64":   "yarn build && yao-pkg dist/index.js --targets node20-macos-x64   --output installer/macos/dist/pax-agent-x64",
-    "pkg:win:x64":     "yarn build && yao-pkg dist/index.js --targets node20-win-x64     --output installer/windows/build/staging/pax-agent.exe",
-    "installer:macos":   "bash installer/macos/build.sh",
+    "pkg:macos:x64": "yarn build && yao-pkg dist/index.js --targets node20-macos-x64   --output installer/macos/dist/pax-agent-x64",
+    "pkg:win:x64": "yarn build && yao-pkg dist/index.js --targets node20-win-x64     --output installer/windows/build/staging/pax-agent.exe",
+    "installer:macos": "bash installer/macos/build.sh",
     "installer:windows": "bash installer/windows/build.sh"
   },
   "engines": {
@@ -40,7 +40,11 @@
     "@yao-pkg/pkg": "^6.6.0"
   },
   "pkg": {
-    "scripts": ["dist/**/*.js"],
-    "assets": ["package.json"]
+    "scripts": [
+      "dist/**/*.js"
+    ],
+    "assets": [
+      "package.json"
+    ]
   }
 }

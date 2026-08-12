@@ -1,17 +1,23 @@
-import { buildPosLinkXml, sendPosLinkCommand, toPaxResult } from '../pax-client';
+import { CommandError } from '../command-error';
+import { ERROR_CODES } from '../protocol/messages';
 import type { DeviceEntry } from '../config';
 import type { PaxResult } from '../protocol/messages';
 
-// ABORT must complete fast — it's only telling PAX to drop the prompt screen,
-// not waiting for a transaction. The original SALE call (still in flight on
-// another fetch) returns separately with a "user cancelled" result code.
-const TIMEOUT_MS = 8_000;
-
-export async function handleCancel(device: DeviceEntry): Promise<PaxResult> {
-  const xml = buildPosLinkXml('ABORT');
-  const raw = await sendPosLinkCommand(
-    { ip: device.ip, port: device.port, timeoutMs: TIMEOUT_MS, transport: device.transport },
-    xml,
+/**
+ * Cancelling an in-progress sale is not implemented yet.
+ *
+ * PAX's JavaScript sample does not cover an abort/cancel command, so its code
+ * is unknown. The caller already treats cancel as best-effort — see
+ * `cancelSale()` in pax-adapter.service.ts, which finalises the payment row
+ * even when the terminal cannot be reached — so failing here degrades cleanly:
+ * staff press Cancel on the terminal itself and the in-flight sale returns with
+ * a user-cancelled result code.
+ *
+ * Revisit once the Low Level Specification arrives from PAX.
+ */
+export async function handleCancel(_device: DeviceEntry): Promise<PaxResult> {
+  throw new CommandError(
+    ERROR_CODES.PROTOCOL_ERROR,
+    'Remote cancel is not supported yet — the POSLink command code is pending the Low Level Specification from PAX. Press Cancel on the terminal instead.',
   );
-  return toPaxResult(raw, 0);
 }

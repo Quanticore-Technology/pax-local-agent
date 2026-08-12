@@ -6,11 +6,6 @@ export interface DeviceEntry {
   device_id: string;
   ip: string;
   port: number;
-  /** POSLink wire transport. Defaults to 'http' when omitted (matches the
-   *  pre-v0.3.6 single-transport behaviour). Set 'tcp' for PAX firmwares
-   *  whose Communication menu only exposes TCP / "External" mode without a
-   *  HTTP option (most BroadPOS-TSYS builds in the field). */
-  transport?: 'http' | 'tcp';
 }
 
 export interface AgentConfig {
@@ -120,9 +115,6 @@ function validateConfig(c: AgentConfig, path: string): void {
   for (const d of c.devices) {
     if (!d.device_id || !d.ip || !d.port) {
       throw new Error(`Each device requires { device_id, ip, port }`);
-    }
-    if (d.transport !== undefined && d.transport !== 'http' && d.transport !== 'tcp') {
-      throw new Error(`Device "${d.device_id}".transport must be 'http' or 'tcp' (got "${d.transport}")`);
     }
     if (ids.has(d.device_id)) throw new Error(`Duplicate device_id "${d.device_id}"`);
     ids.add(d.device_id);

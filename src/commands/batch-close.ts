@@ -1,15 +1,26 @@
-import { buildPosLinkXml, sendPosLinkCommand, toPaxResult } from '../pax-client';
+import { CommandError } from '../command-error';
+import { ERROR_CODES } from '../protocol/messages';
 import type { DeviceEntry } from '../config';
-import type { PaxResult, BatchClosePayload } from '../protocol/messages';
+import type { BatchClosePayload, PaxResult } from '../protocol/messages';
 
-const TIMEOUT_MS = 58_000;
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export async function handleBatchClose(device: DeviceEntry, _payload: BatchClosePayload): Promise<PaxResult> {
-  const xml = buildPosLinkXml('BATCHCLOSE');
-  const raw = await sendPosLinkCommand(
-    { ip: device.ip, port: device.port, timeoutMs: TIMEOUT_MS, transport: device.transport },
-    xml,
+/**
+ * Batch close is not implemented yet.
+ *
+ * PAX's JavaScript sample only demonstrates Initialize (A00), GetSignature
+ * (A08), DoSignature (A20) and DoCredit (T00). The command code for batch
+ * settlement is not among them, and the previous implementation's guess never
+ * reached the terminal. Rather than ship another guess, this fails loudly until
+ * the Low Level Specification document arrives from PAX and we can use the
+ * documented code.
+ *
+ * Merchants can still settle from the terminal's own menu in the meantime.
+ */
+export async function handleBatchClose(
+  _device: DeviceEntry,
+  _payload: BatchClosePayload,
+): Promise<PaxResult> {
+  throw new CommandError(
+    ERROR_CODES.PROTOCOL_ERROR,
+    'Batch close is not supported yet — the POSLink command code is pending the Low Level Specification from PAX. Settle from the terminal menu for now.',
   );
-  return toPaxResult(raw, 0);
 }

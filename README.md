@@ -3,10 +3,24 @@
 On-prem relay between the GoNails cloud backend (DigitalOcean) and a PAX A920 / A920 Pro on the salon LAN.
 
 ```
-Browser ──HTTPS──→ Backend (DO) ──WSS──→ this agent ──HTTP POSLink──→ PAX A920
+Browser ──HTTPS──→ Backend (DO) ──WSS──→ this agent ──POSLink HTTP GET──→ PAX A920
 ```
 
-The agent opens a single outbound `wss://` connection to the backend (port 443, no inbound firewall hole required) and forwards `pax.sale | void | refund | tip_adjust | batch_close | ping` commands to the device.
+The agent opens a single outbound `wss://` connection to the backend (port 443, no inbound firewall hole required) and forwards `pax.sale | void | refund | tip_adjust | ping` commands to the device.
+
+Device communication uses the **POSLink Low Level Specification** — a framed
+byte protocol (`STX │ command │ FS │ … │ ETX │ LRC`) base64-encoded into an HTTP
+GET query string. PAX's POSLink SDK is only a wrapper around this protocol and
+exists solely for .NET / Java / iOS; platforms without an SDK build the packets
+directly. See [`src/poslink-protocol.ts`](src/poslink-protocol.ts).
+
+**The terminal must be set to `Comm Type = Ethernet` and `Protocol Type = HTTP GET`**
+(ECR Comm Settings — tap the four screen corners, password `1` or MMDDYYYY).
+
+`batch_close` and `cancel` are not implemented: their command codes are absent
+from PAX's published sample and we are waiting on the Low Level Specification
+document rather than guessing. Both fail with a clear message; settle and cancel
+from the terminal's own menu meanwhile.
 
 ## Install (macOS, prod) — pairing-code flow
 
@@ -87,6 +101,7 @@ See `src/protocol/messages.ts` (vendored from `nail-salon-api/src/modules/pax-ag
 | Symptom | Likely cause |
 |---|---|
 | `ws_connected: false` in `/health` | Wrong token, revoked token, wrong `wss_url`, or no internet from salon |
-| `DEVICE_UNREACHABLE` errors | PAX powered off, IP changed (DHCP), or POSLink TCP not enabled on terminal |
-| `POSLINK_ERROR` errors | XML format mismatch — check PAX firmware version |
+| `DEVICE_UNREACHABLE` errors | PAX powered off, IP changed (DHCP), agent host on a different subnet, or ECR server not enabled on the terminal |
+| Connects but never answers | `Protocol Type` is not `HTTP GET` in ECR Comm Settings |
+| `POSLINK_ERROR` errors | Terminal replied with a malformed packet — check the BroadPOS log at `sdcard/Android/data/<broadpos.package>/files/broadpos_logYYYYMMDD.log` |
 | Service installed but not running | Open `services.msc`, find `GoNailsPaxAgent`, click Start; check Event Viewer for crash details |

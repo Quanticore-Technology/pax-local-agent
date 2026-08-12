@@ -104,13 +104,13 @@ export const CONFIG_UI_HTML = `<!doctype html>
       </div>
     </div>
     <div class="row" style="margin-top:8px;">
-      <div>
-        <label for="device_transport">Transport</label>
-        <select id="device_transport" autocomplete="off">
-          <option value="http">HTTP (default)</option>
-          <option value="tcp">TCP (raw POSLink — older firmware)</option>
-        </select>
-        <div class="muted" style="margin-top:4px;">Use TCP when BroadPOS Communication menu has no HTTP option.</div>
+      <div class="muted">
+        <strong>On the PAX terminal:</strong> tap the four screen corners
+        (top-left → top-right → bottom-right → bottom-left), enter password
+        <code>1</code> or today's date as MMDDYYYY, then open
+        <strong>ECR Comm Settings</strong> and set
+        <strong>Comm Type = Ethernet</strong> and
+        <strong>Protocol Type = HTTP GET</strong>.
       </div>
     </div>
   </div>
@@ -178,7 +178,6 @@ async function fetchConfig() {
     const d = (c.devices && c.devices[0]) || {};
     $('device_ip').value = d.ip || '';
     $('device_port').value = d.port || 10009;
-    $('device_transport').value = d.transport === 'tcp' ? 'tcp' : 'http';
   } catch (e) {}
 }
 
@@ -223,7 +222,6 @@ $('save').addEventListener('click', async () => {
         device_id: 'default',
         ip: $('device_ip').value.trim(),
         port: parseInt($('device_port').value.trim(), 10) || 10009,
-        transport: $('device_transport').value === 'tcp' ? 'tcp' : 'http',
       }],
     };
     const r = await fetch('/api/config', {
