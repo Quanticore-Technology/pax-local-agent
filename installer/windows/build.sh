@@ -117,12 +117,36 @@ echo "  nssm.exe      ($(du -h "$STAGING_DIR/nssm.exe" | cut -f1))"
 # ---------------------------------------------------------------------------
 if command -v iscc >/dev/null 2>&1; then
   echo "==> Found iscc on PATH — compiling installer"
-  iscc /Q \
-    /DAppVersion="$VERSION" \
-    /DStagingDir="$STAGING_DIR" \
-    /DEnvLabel="$ENV_LABEL" \
-    /O"$DIST_DIR" \
-    "$SCRIPT_DIR/pax-agent.iss"
+
+  # ISCC.exe is a native Windows program, but this script runs under Git Bash,
+  # and that combination needs two separate accommodations.
+  #
+  # 1. MSYS rewrites any argument that looks like a Unix path before handing it
+  #    to a native binary, so `/Q` arrives as `Q:\` and `/DAppVersion=0.4.2` as
+  #    `D:\AppVersion=0.4.2`. ISCC reads those as extra script filenames and
+  #    aborts with "You may not specify more than one script filename."
+  #    MSYS2_ARG_CONV_EXCL / MSYS_NO_PATHCONV turn that rewriting off.
+  #
+  # 2. Our paths are Unix-style (/d/a/…), which ISCC cannot resolve. cygpath
+  #    converts them to D:\… form. It exists in Git Bash; the fallback keeps
+  #    this branch usable anywhere else that happens to have iscc on PATH.
+  if command -v cygpath >/dev/null 2>&1; then
+    ISS_SCRIPT="$(cygpath -w "$SCRIPT_DIR/pax-agent.iss")"
+    ISS_STAGING="$(cygpath -w "$STAGING_DIR")"
+    ISS_OUTDIR="$(cygpath -w "$DIST_DIR")"
+  else
+    ISS_SCRIPT="$SCRIPT_DIR/pax-agent.iss"
+    ISS_STAGING="$STAGING_DIR"
+    ISS_OUTDIR="$DIST_DIR"
+  fi
+
+  MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 iscc \
+    "/Q" \
+    "/DAppVersion=$VERSION" \
+    "/DStagingDir=$ISS_STAGING" \
+    "/DEnvLabel=$ENV_LABEL" \
+    "/O$ISS_OUTDIR" \
+    "$ISS_SCRIPT"
   FINAL="$DIST_DIR/GoNailsPaxAgent-${VERSION}-${ENV_LABEL}.exe"
   echo
   echo "✓ Built: $FINAL ($(du -h "$FINAL" | cut -f1))"
