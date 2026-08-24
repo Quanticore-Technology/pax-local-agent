@@ -52,7 +52,7 @@ mkdir -p "$STAGING_DIR/scripts" "$DIST_DIR" "$NSSM_CACHE"
 # 1. Compile TS + bundle Node + agent into a single Windows .exe
 # ---------------------------------------------------------------------------
 echo "==> Compiling TypeScript"
-yarn build >/dev/null
+npm run build >/dev/null
 
 echo "==> Bundling Node binary (node20-win-x64) via @yao-pkg/pkg"
 npx --yes @yao-pkg/pkg dist/index.js \

@@ -1,0 +1,240 @@
+name: Build & publish installers
+
+# Publishing is keyed on the version in package.json, not on the commit.
+#
+# Every push to main builds and tests, but the upload step is skipped unless
+# that version is absent from the CDN. Uploads are served with an immutable
+# cache header, so overwriting a published version would leave browsers and the
+# CDN handing out the old bytes under the new number — worse than not shipping.
+#
+# In practice: commit freely, and bump `version` in package.json when you want a
+# release. Use the manual run with `force` to re-cut a version deliberately.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'installer/**'
+      - 'package.json'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Republish even if this version already exists on the CDN'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One release at a time — two concurrent runs would race on the same CDN keys.
+concurrency:
+  group: agent-release
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      publish: ${{ steps.guard.outputs.publish }}
+      envs: ${{ steps.envs.outputs.json }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: version
+        run: echo "value=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # Single source of truth for the environment matrix, consumed by both
+      # build jobs via fromJSON so the URLs are not repeated per platform.
+      - id: envs
+        run: |
+          cat >envs.json <<'JSON'
+          [
+            {"label": "prod",    "bootstrap": "https://api.gonails.us"},
+            {"label": "staging", "bootstrap": "https://nail-salon-api-dev-rnkac.ondigitalocean.app"},
+            {"label": "dev",     "bootstrap": "http://localhost:8000"}
+          ]
+          JSON
+          echo "json=$(jq -c . envs.json)" >> "$GITHUB_OUTPUT"
+
+      - id: guard
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_ACCESS_KEY }}
+          BUCKET: ${{ secrets.DO_SPACES_BUCKET_NAME }}
+          ENDPOINT: ${{ secrets.DO_SPACES_ENDPOINT }}
+          REGION: ${{ secrets.DO_SPACES_REGION }}
+          VERSION: ${{ steps.version.outputs.value }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          case "$ENDPOINT" in http://*|https://*) ;; *) ENDPOINT="https://$ENDPOINT" ;; esac
+          existing=$(aws s3 ls "s3://$BUCKET/pax-agent/v$VERSION/" \
+            --endpoint-url "$ENDPOINT" --region "$REGION" --recursive | wc -l)
+          if [ "$FORCE" = "true" ] || [ "$existing" -eq 0 ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::v$VERSION will be published ($existing existing objects, force=$FORCE)"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::v$VERSION already has $existing objects on the CDN — build only, no upload. Bump package.json version to release."
+          fi
+
+  test:
+    name: Typecheck & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx jest
+
+  windows:
+    name: Windows installer (${{ matrix.env.label }})
+    needs: [meta, test]
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.meta.outputs.envs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      # build.sh compiles the .iss only when `iscc` is on PATH; otherwise it
+      # stages the payload and exits successfully, which would silently produce
+      # no installer. Putting Inno Setup on PATH is what makes the run real.
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup --no-progress -y
+          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
+
+      - name: Build
+        shell: bash
+        env:
+          ENV_LABEL: ${{ matrix.env.label }}
+          BOOTSTRAP_URL: ${{ matrix.env.bootstrap }}
+        run: bash installer/windows/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.env.label }}
+          path: installer/windows/dist/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: macOS installer (${{ matrix.env.label }})
+    needs: [meta, test]
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: ${{ fromJSON(needs.meta.outputs.envs) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: Build
+        env:
+          ENV_LABEL: ${{ matrix.env.label }}
+          BOOTSTRAP_URL: ${{ matrix.env.bootstrap }}
+        run: bash installer/macos/build.sh
+
+      # The .pkg is useless on half the salon estate if the fuse silently
+      # produced a single slice, and that failure is invisible at install time.
+      - name: Assert the binary is universal
+        run: |
+          set -euo pipefail
+          archs=$(lipo -archs installer/macos/build/root/usr/local/bin/pax-agent)
+          echo "archs: $archs"
+          case "$archs" in
+            *x86_64*arm64*|*arm64*x86_64*) ;;
+            *) echo "::error::expected a universal binary, got '$archs'"; exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.env.label }}
+          path: installer/macos/dist/*.pkg
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to CDN
+    needs: [meta, windows, macos]
+    if: needs.meta.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Upload
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.DO_SPACES_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.DO_SPACES_SECRET_ACCESS_KEY }}
+          BUCKET: ${{ secrets.DO_SPACES_BUCKET_NAME }}
+          ENDPOINT: ${{ secrets.DO_SPACES_ENDPOINT }}
+          REGION: ${{ secrets.DO_SPACES_REGION }}
+          CDN: ${{ secrets.DO_SPACES_CDN_URL }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          case "$ENDPOINT" in http://*|https://*) ;; *) ENDPOINT="https://$ENDPOINT" ;; esac
+
+          # Layout must match what upload-installer.sh has always written, so
+          # the dashboard's installer URLs keep their shape:
+          #   pax-agent/v<version>/<env>/GoNailsPaxAgent-<version>-<env>.<ext>
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")            # e.g. windows-prod
+            envlabel=${name#*-}
+            for file in "$dir"*; do
+              [ -f "$file" ] || continue
+              case "$file" in
+                *.exe) ctype='application/x-msdownload' ;;
+                *.pkg) ctype='application/x-newton-compatible-pkg' ;;
+                *) echo "skipping unexpected artifact $file"; continue ;;
+              esac
+              key="pax-agent/v$VERSION/$envlabel/$(basename "$file")"
+              aws s3 cp "$file" "s3://$BUCKET/$key" \
+                --endpoint-url "$ENDPOINT" --region "$REGION" \
+                --acl public-read --content-type "$ctype" \
+                --cache-control 'public, max-age=31536000, immutable' \
+                --only-show-errors
+              echo "  ${CDN%/}/$key"
+            done
+          done
+
+      - name: Summary
+        env:
+          CDN: ${{ secrets.DO_SPACES_CDN_URL }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          {
+            echo "### PAX Agent v$VERSION published"
+            echo
+            echo "| Env | Windows | macOS |"
+            echo "|---|---|---|"
+            for e in prod staging dev; do
+              base="${CDN%/}/pax-agent/v$VERSION/$e/GoNailsPaxAgent-$VERSION-$e"
+              echo "| $e | [.exe]($base.exe) | [.pkg]($base.pkg) |"
+            done
+            echo
+            echo "Remember to point NEXT_PUBLIC_PAX_AGENT_INSTALLER_*_URL at v$VERSION and redeploy the dashboard."
+          } >> "$GITHUB_STEP_SUMMARY"

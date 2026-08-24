@@ -4,8 +4,8 @@
 # Output: installer/macos/dist/GoNailsPaxAgent-<version>.pkg
 #
 # Steps:
-#   1. tsc → dist/  (yarn build)
-#   2. pkg → single-file binary for the host arch (macos-arm64 or macos-x64)
+#   1. tsc → dist/  (npm run build)
+#   2. pkg → arm64 + x64 binaries, fused with lipo into one universal binary
 #   3. pkgbuild → component .pkg (binary + plist + scripts)
 #   4. productbuild → distribution .pkg (welcome/conclusion + version metadata)
 #
@@ -17,12 +17,12 @@ AGENT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$AGENT_DIR"
 
 VERSION="$(node -p "require('./package.json').version")"
-ARCH="$(uname -m)"   # arm64 or x86_64
-case "$ARCH" in
-  arm64)  PKG_TARGET="node20-macos-arm64";;
-  x86_64) PKG_TARGET="node20-macos-x64";;
-  *) echo "Unsupported arch: $ARCH"; exit 1;;
-esac
+
+# Built as a universal binary rather than for the host arch. pkg cross-compiles
+# happily, so the only cost is a second bundling pass — and building for
+# `uname -m` alone meant every .pkg cut on an Apple Silicon machine simply did
+# not run on the Intel Macs still common as salon POS hardware, while installing
+# without complaint.
 
 # BOOTSTRAP_URL is the cloud backend endpoint the agent dials for first-time
 # pairing. Different per environment:
@@ -52,13 +52,23 @@ mkdir -p "$DIST_DIR" "$ROOT_DIR/usr/local/bin" \
          "$ROOT_DIR/Applications"
 
 echo "==> Compiling TypeScript"
-yarn build >/dev/null
+npm run build >/dev/null
 
-echo "==> Bundling Node binary ($PKG_TARGET) via @yao-pkg/pkg"
-npx --yes @yao-pkg/pkg dist/index.js \
-  --targets "$PKG_TARGET" \
-  --output  "$ROOT_DIR/usr/local/bin/pax-agent" \
-  --compress GZip >/dev/null
+echo "==> Bundling Node binaries (arm64 + x64) via @yao-pkg/pkg"
+ARCH_TMP="$SCRIPT_DIR/build/arch"
+mkdir -p "$ARCH_TMP"
+for slice in arm64 x64; do
+  npx --yes @yao-pkg/pkg dist/index.js \
+    --targets "node20-macos-${slice}" \
+    --output  "$ARCH_TMP/pax-agent-${slice}" \
+    --compress GZip >/dev/null
+done
+
+echo "==> Fusing into a universal binary"
+lipo -create -output "$ROOT_DIR/usr/local/bin/pax-agent" \
+  "$ARCH_TMP/pax-agent-arm64" "$ARCH_TMP/pax-agent-x64"
+chmod 755 "$ROOT_DIR/usr/local/bin/pax-agent"
+lipo -archs "$ROOT_DIR/usr/local/bin/pax-agent"
 
 echo "==> Staging plist (with $ENV_LABEL bootstrap URL) + uninstall helper + .app launcher"
 # Inject env-specific BOOTSTRAP_URL into the plist template at staging time.
