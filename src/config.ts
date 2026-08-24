@@ -6,7 +6,19 @@ export interface DeviceEntry {
   device_id: string;
   ip: string;
   port: number;
+  /**
+   * The terminal's Secondary Port (ECR Comm Settings, default 10010).
+   *
+   * The primary port serves one transaction at a time: while a sale is waiting
+   * for a card it will not answer anything else, so an abort sent there would
+   * simply queue behind the very sale it is meant to stop. PAX exposes this
+   * second listener for exactly that out-of-band case.
+   */
+  secondary_port?: number;
 }
+
+/** ECR Comm Settings ships with Secondary Port = 10010. */
+export const DEFAULT_SECONDARY_PORT = 10010;
 
 export interface AgentConfig {
   /** wss://api.host/ws/pax-agent */

@@ -33,14 +33,61 @@ export interface CreditRequestFields {
   tipCents?: number;
   /** ECR-side sequence number. The terminal echoes it back for matching. */
   referenceNumber?: string;
-  /** Our external payment id, so the transaction is traceable in PAX reporting. */
+  /**
+   * Our external payment id, so the transaction is traceable in PAX reporting.
+   * Folded to 12 digits by `toInvoiceNumber` — PAX rejects anything else.
+   */
   invoiceNumber?: string;
   /** TransactionNumber of the original sale — required by VOID and ADJUST. */
   origTransactionNumber?: string;
+  /**
+   * Ask the terminal to prompt the customer for a tip on its own screen.
+   * Without this the prompt depends entirely on the tip settings configured in
+   * BroadPOS on the device, which we cannot see or control from here.
+   */
+  tipPrompt?: boolean;
 }
 
 function emptyGroup(size: number): string[] {
   return new Array(size).fill('');
+}
+
+/**
+ * PAX accepts only digits in InvoiceNumber, at most 12 of them. Anything else
+ * makes the terminal reject the whole request with "INVOICE INVALID" before it
+ * even prompts for a card.
+ *
+ * Our external payment ids are UUIDs, so fold the UUID's hex digits into a
+ * 12-digit number. The mapping is deterministic, so a row in PAX's batch report
+ * can still be traced back to a payment by recomputing this from its
+ * external_payment_id.
+ */
+const INVOICE_DIGITS = 12;
+const INVOICE_MODULUS = 1_000_000_000_000n; // 10^12 — one more digit than we emit
+
+export function toInvoiceNumber(externalId: string): string {
+  // Already a legal invoice number — pass it through so hand-set ids stay readable.
+  if (/^\d{1,12}$/.test(externalId)) return externalId;
+
+  // 16 hex chars (64 bits) is well past 10^12, so the modulus does the real work.
+  const hex = externalId.replace(/[^0-9a-f]/gi, '').slice(0, 16);
+  if (!hex) return ''; // nothing numeric to work with — send no invoice at all
+
+  return (BigInt(`0x${hex}`) % INVOICE_MODULUS).toString().padStart(INVOICE_DIGITS, '0');
+}
+
+/**
+ * `additionalInformation` is the one group the terminal reads by NAME rather
+ * than by position: every entry is `KEY=VALUE`, and a key we don't send is
+ * simply absent — no placeholder needed. Key names come from PAX's sample
+ * (`js/main.js`, `GetConfigureData()`).
+ *
+ * TIPREQ=1 is "need enter tip on terminal" per `pax.html`'s TipRequest select.
+ */
+function buildAdditionalInformation(fields: CreditRequestFields): string[] {
+  const entries: string[] = [];
+  if (fields.tipPrompt) entries.push('TIPREQ=1');
+  return entries;
 }
 
 export function buildCreditGroups(fields: CreditRequestFields): PacketGroup[] {
@@ -57,7 +104,7 @@ export function buildCreditGroups(fields: CreditRequestFields): PacketGroup[] {
   // blank; the terminal only uses it to echo the request back to us.
   trace[TRACE_REFERENCE] = fields.referenceNumber ?? '1';
   if (fields.invoiceNumber) {
-    trace[TRACE_INVOICE] = fields.invoiceNumber;
+    trace[TRACE_INVOICE] = toInvoiceNumber(fields.invoiceNumber);
   }
   if (fields.origTransactionNumber) {
     trace[TRACE_TRANSACTION_NUMBER] = fields.origTransactionNumber;
@@ -72,6 +119,6 @@ export function buildCreditGroups(fields: CreditRequestFields): PacketGroup[] {
     [], // cashierInformation
     [], // commercialInformation
     [], // motoEcommerce
-    [], // additionalInformation
+    buildAdditionalInformation(fields),
   ];
 }

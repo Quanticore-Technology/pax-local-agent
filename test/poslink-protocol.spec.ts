@@ -19,7 +19,7 @@ import {
   parsePacket,
   subField,
 } from '../src/poslink-protocol';
-import { buildCreditGroups } from '../src/poslink-credit-request';
+import { buildCreditGroups, toInvoiceNumber } from '../src/poslink-credit-request';
 import { toPaxResult } from '../src/pax-client';
 import { buildMockResponse } from './poslink-mock-server';
 
@@ -117,15 +117,81 @@ describe('DoCredit request groups', () => {
     const groups = buildCreditGroups({
       transactionType: TRANS_TYPE.SALE,
       amountCents: 4500,
-      invoiceNumber: 'ext-42',
+      invoiceNumber: '000000000042',
       origTransactionNumber: '123',
     });
     const amount = groups[1] as string[];
     const trace = groups[3] as string[];
 
     expect(amount[0]).toBe('4500');
-    expect(trace[1]).toBe('ext-42');
+    expect(trace[1]).toBe('000000000042');
     expect(trace[3]).toBe('123');
+  });
+
+  // Regression: sending the raw UUID here made the terminal answer
+  // "INVOICE INVALID" and refuse the sale before reading a card.
+  it('folds a UUID external id into a 12-digit invoice number', () => {
+    const groups = buildCreditGroups({
+      transactionType: TRANS_TYPE.SALE,
+      amountCents: 102,
+      invoiceNumber: '3f2a9c1e-7b4d-4e8a-9f21-6c5d8e0a1b23',
+    });
+    expect((groups[3] as string[])[1]).toMatch(/^\d{12}$/);
+  });
+
+  describe('toInvoiceNumber', () => {
+    it('passes through an id that is already a legal invoice number', () => {
+      expect(toInvoiceNumber('42')).toBe('42');
+      expect(toInvoiceNumber('000000000123')).toBe('000000000123');
+    });
+
+    it('always yields at most 12 digits, whatever the input', () => {
+      for (const id of [
+        '3f2a9c1e-7b4d-4e8a-9f21-6c5d8e0a1b23',
+        'ffffffff-ffff-ffff-ffff-ffffffffffff',
+        'pay_ABC-999',
+        '1234567890123456789',
+      ]) {
+        expect(toInvoiceNumber(id)).toMatch(/^\d{1,12}$/);
+      }
+    });
+
+    it('is deterministic, so a PAX report row maps back to the payment', () => {
+      const id = '3f2a9c1e-7b4d-4e8a-9f21-6c5d8e0a1b23';
+      expect(toInvoiceNumber(id)).toBe(toInvoiceNumber(id));
+    });
+
+    it('sends no invoice when the id has nothing numeric in it', () => {
+      expect(toInvoiceNumber('zzz')).toBe('');
+    });
+  });
+
+  describe('additionalInformation', () => {
+    it('asks the terminal to prompt for a tip when tipPrompt is set', () => {
+      const groups = buildCreditGroups({
+        transactionType: TRANS_TYPE.SALE,
+        amountCents: 102,
+        tipPrompt: true,
+      });
+      expect(groups[8]).toEqual(['TIPREQ=1']);
+    });
+
+    it('stays empty otherwise, so VOID and ADJUST never prompt for a tip', () => {
+      expect(buildCreditGroups({ transactionType: TRANS_TYPE.VOID })[8]).toEqual([]);
+      expect(buildCreditGroups({ transactionType: TRANS_TYPE.ADJUST, tipCents: 500 })[8]).toEqual(
+        [],
+      );
+    });
+
+    it('emits KEY=VALUE with no positional padding, unlike every other group', () => {
+      const packet = buildPacket(
+        COMMAND.DO_CREDIT,
+        buildCreditGroups({ transactionType: TRANS_TYPE.SALE, amountCents: 102, tipPrompt: true }),
+      );
+      const body = packet.slice(1, packet.indexOf(ETX)).toString('ascii');
+      // Last group, straight after the final FS, and with no US padding around it.
+      expect(body.endsWith(`${String.fromCharCode(FS)}TIPREQ=1`)).toBe(true);
+    });
   });
 
   it('puts an ADJUST tip in the tip slot, leaving the base amount alone', () => {

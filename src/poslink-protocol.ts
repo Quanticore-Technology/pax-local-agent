@@ -44,6 +44,33 @@ export const COMMAND = {
   DO_SIGNATURE: 'A20',
   DO_CREDIT: 'T00',
   BATCH_CLOSE: 'B00',
+  /**
+   * UNVERIFIED — abort an in-progress transaction. Not in PAX's sample, and not
+   * in the setup guide we hold. See `commands/cancel.ts`: the handler logs the
+   * terminal's full reply so one live probe settles whether this is the code.
+   */
+  ABORT: 'A16',
+} as const;
+
+/**
+ * TransactionType values for the B00 (Batch) command.
+ *
+ * UNVERIFIED — PAX's JavaScript sample covers only A00/A08/A20/T00, so these
+ * are inferred from T00's numbering, where 01 is the primary operation. The
+ * terminal's ResponseCode on a live probe is the authority; see
+ * `commands/batch-close.ts`, which logs every response field so one real run
+ * settles the layout.
+ */
+export const BATCH_TRANS_TYPE = {
+  CLOSE: '01',
+} as const;
+
+/**
+ * EDCType selects which card types to settle. 0 = ALL is the only value we
+ * need — a salon settles everything together.
+ */
+export const EDC_TYPE = {
+  ALL: '0',
 } as const;
 
 /** TransactionType values for the T00 (DoCredit) command. */

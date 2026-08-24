@@ -46,10 +46,19 @@ export const CONFIG_UI_HTML = `<!doctype html>
   .secret-row { display: flex; gap: 6px; }
   .secret-row input { flex: 1; }
   .small { padding: 8px 10px; }
+  /* Version sits in the title so "which build is actually running?" is
+     answerable at a glance — an upgrade that silently failed to replace the
+     binary looks identical to a successful one everywhere else. */
+  .version {
+    font-size: 13px; font-weight: 600; vertical-align: middle;
+    padding: 3px 8px; border-radius: 999px; margin-left: 8px;
+    background: #eceff4; color: #4a5260; font-family: ui-monospace, Menlo, Consolas, monospace;
+  }
+  .version.stale { background: #ffe8e6; color: #b3261e; }
 </style>
 </head>
 <body>
-  <h1>GoNails PAX Agent</h1>
+  <h1>GoNails PAX Agent <span class="version" id="version-badge" title="Installed agent version">v…</span></h1>
   <p class="sub">On-prem relay between the cloud POS and your PAX A920 terminal.</p>
 
   <div class="card">
@@ -126,6 +135,11 @@ export const CONFIG_UI_HTML = `<!doctype html>
 <script>
 const $ = (id) => document.getElementById(id);
 const setStatus = (s) => {
+  // Version first: it must survive every other branch below, including the
+  // not-yet-paired one, because that is exactly when someone is checking
+  // whether the installer actually replaced the binary.
+  $('version-badge').textContent = 'v' + (s.version || '?');
+  $('version-badge').classList.remove('stale');
   $('status-dot').className = 'dot ' + (s.ws_connected ? 'online' : (s.has_config ? 'offline' : 'unknown'));
   if (s.ws_connected) {
     $('status-text').textContent = 'Online — connected to backend';
@@ -134,7 +148,8 @@ const setStatus = (s) => {
   } else {
     $('status-text').textContent = 'Offline — not connected';
   }
-  $('status-detail').textContent = 'Agent v' + s.version + ' · uptime ' + s.uptime_s + 's' + (s.last_command_at ? ' · last cmd ' + new Date(s.last_command_at).toLocaleTimeString() : '');
+  // Version moved to the title badge — keep this line for the volatile bits.
+  $('status-detail').textContent = 'Uptime ' + s.uptime_s + 's' + (s.last_command_at ? ' · last cmd ' + new Date(s.last_command_at).toLocaleTimeString() : '');
 
   // Pairing card: visible only while no config + we have a code to show.
   const pairCard = $('pair-card');
@@ -158,6 +173,10 @@ async function fetchStatus() {
   } catch (e) {
     $('status-dot').className = 'dot offline';
     $('status-text').textContent = 'Cannot reach agent';
+    // Flag the badge rather than leaving a version on screen that we can no
+    // longer vouch for — a stale number here would be worse than none.
+    $('version-badge').textContent = 'v?';
+    $('version-badge').classList.add('stale');
   }
 }
 async function fetchConfig() {
