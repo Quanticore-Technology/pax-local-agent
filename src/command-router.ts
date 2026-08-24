@@ -1,5 +1,6 @@
 import { getLogger } from './logger';
 import type { AgentConfig, DeviceEntry } from './config';
+import { CommandError } from './command-error';
 import {
   ERROR_CODES,
   PaxResult,
@@ -16,11 +17,7 @@ import { handleCancel } from './commands/cancel';
 
 const logger = getLogger();
 
-export class CommandError extends Error {
-  constructor(public readonly code: string, message: string) {
-    super(message);
-  }
-}
+export { CommandError };
 
 function resolveDevice(config: AgentConfig, deviceId: string | undefined): DeviceEntry {
   // device_id is mandatory in the wire protocol, but ping may omit it.
@@ -88,12 +85,24 @@ async function runCommand(config: AgentConfig, msg: RequestMessage): Promise<Pax
   }
 }
 
+/**
+ * Map a transport-level failure onto a stable wire error code.
+ *
+ * These stay distinct because they point at different fixes: a refused
+ * connection means the ECR server is switched off on the terminal, an
+ * unreachable host usually means the agent and terminal are on different
+ * subnets, and a timeout means the terminal accepted the connection but never
+ * answered — typically a Protocol Type mismatch in ECR Comm Settings.
+ */
 function pickErrorCode(err: unknown): string {
   const e = err as Error & { code?: string; cause?: { code?: string } };
-  // AbortError fires when our fetch timeout elapses — the device never
-  // responded, which is "unreachable" not "busy".
-  if (e.name === 'AbortError') return ERROR_CODES.DEVICE_UNREACHABLE;
-  if (e.code === 'ECONNREFUSED' || e.cause?.code === 'ECONNREFUSED') return ERROR_CODES.DEVICE_UNREACHABLE;
-  if (e.code === 'EHOSTUNREACH' || e.cause?.code === 'EHOSTUNREACH') return ERROR_CODES.DEVICE_UNREACHABLE;
+  const code = e.code || e.cause?.code;
+
+  if (code === 'ECONNREFUSED') return ERROR_CODES.DEVICE_UNREACHABLE;
+  if (code === 'EHOSTUNREACH' || code === 'ENETUNREACH') return ERROR_CODES.DEVICE_UNREACHABLE;
+  if (code === 'ETIMEDOUT' || code === 'ECONNRESET') return ERROR_CODES.DEVICE_UNREACHABLE;
+  // Our own timeout, raised by pax-client when the terminal accepts the
+  // connection but sends nothing back.
+  if (/timed out/i.test(e.message || '')) return ERROR_CODES.DEVICE_UNREACHABLE;
   return ERROR_CODES.POSLINK_ERROR;
 }

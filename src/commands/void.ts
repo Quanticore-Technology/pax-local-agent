@@ -1,16 +1,22 @@
-import { buildPosLinkXml, sendPosLinkCommand, toPaxResult } from '../pax-client';
+import { sendCommand, toPaxResult } from '../pax-client';
+import { COMMAND, TRANS_TYPE } from '../poslink-protocol';
+import { buildCreditGroups } from '../poslink-credit-request';
 import type { DeviceEntry } from '../config';
 import type { PaxResult, VoidPayload } from '../protocol/messages';
 
 const TIMEOUT_MS = 28_000; // backend uses 30s
 
 export async function handleVoid(device: DeviceEntry, payload: VoidPayload): Promise<PaxResult> {
-  const xml = buildPosLinkXml('VOID', {
-    OrigRefNum: payload.orig_ref_num,
+  // `orig_ref_num` is the TransactionNumber we surfaced from the original sale.
+  const groups = buildCreditGroups({
+    transactionType: TRANS_TYPE.VOID,
+    origTransactionNumber: payload.orig_ref_num,
   });
-  const raw = await sendPosLinkCommand(
-    { ip: device.ip, port: device.port, timeoutMs: TIMEOUT_MS, transport: device.transport },
-    xml,
+
+  const parsed = await sendCommand(
+    { ip: device.ip, port: device.port, timeoutMs: TIMEOUT_MS },
+    COMMAND.DO_CREDIT,
+    groups,
   );
-  return toPaxResult(raw, 0);
+  return toPaxResult(parsed, 0);
 }

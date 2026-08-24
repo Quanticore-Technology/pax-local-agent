@@ -81,7 +81,6 @@ function healthSnapshot(version: string, state: AgentState): object {
       device_id: d.device_id,
       ip: d.ip,
       port: d.port,
-      transport: d.transport ?? 'http',
     })) ?? [],
     last_command_at: state.last_command_at,
     uptime_s: Math.floor(process.uptime()),
@@ -90,7 +89,7 @@ function healthSnapshot(version: string, state: AgentState): object {
 
 function sanitizedConfig(c: AgentConfig | null): object {
   if (!c) {
-    return { has_token: false, devices: [{ device_id: 'default', ip: '', port: 10009, transport: 'http' }] };
+    return { has_token: false, devices: [{ device_id: 'default', ip: '', port: 10009 }] };
   }
   return {
     wss_url: c.wss_url,

@@ -46,10 +46,19 @@ export const CONFIG_UI_HTML = `<!doctype html>
   .secret-row { display: flex; gap: 6px; }
   .secret-row input { flex: 1; }
   .small { padding: 8px 10px; }
+  /* Version sits in the title so "which build is actually running?" is
+     answerable at a glance — an upgrade that silently failed to replace the
+     binary looks identical to a successful one everywhere else. */
+  .version {
+    font-size: 13px; font-weight: 600; vertical-align: middle;
+    padding: 3px 8px; border-radius: 999px; margin-left: 8px;
+    background: #eceff4; color: #4a5260; font-family: ui-monospace, Menlo, Consolas, monospace;
+  }
+  .version.stale { background: #ffe8e6; color: #b3261e; }
 </style>
 </head>
 <body>
-  <h1>GoNails PAX Agent</h1>
+  <h1>GoNails PAX Agent <span class="version" id="version-badge" title="Installed agent version">v…</span></h1>
   <p class="sub">On-prem relay between the cloud POS and your PAX A920 terminal.</p>
 
   <div class="card">
@@ -104,13 +113,13 @@ export const CONFIG_UI_HTML = `<!doctype html>
       </div>
     </div>
     <div class="row" style="margin-top:8px;">
-      <div>
-        <label for="device_transport">Transport</label>
-        <select id="device_transport" autocomplete="off">
-          <option value="http">HTTP (default)</option>
-          <option value="tcp">TCP (raw POSLink — older firmware)</option>
-        </select>
-        <div class="muted" style="margin-top:4px;">Use TCP when BroadPOS Communication menu has no HTTP option.</div>
+      <div class="muted">
+        <strong>On the PAX terminal:</strong> tap the four screen corners
+        (top-left → top-right → bottom-right → bottom-left), enter password
+        <code>1</code> or today's date as MMDDYYYY, then open
+        <strong>ECR Comm Settings</strong> and set
+        <strong>Comm Type = Ethernet</strong> and
+        <strong>Protocol Type = HTTP GET</strong>.
       </div>
     </div>
   </div>
@@ -126,6 +135,11 @@ export const CONFIG_UI_HTML = `<!doctype html>
 <script>
 const $ = (id) => document.getElementById(id);
 const setStatus = (s) => {
+  // Version first: it must survive every other branch below, including the
+  // not-yet-paired one, because that is exactly when someone is checking
+  // whether the installer actually replaced the binary.
+  $('version-badge').textContent = 'v' + (s.version || '?');
+  $('version-badge').classList.remove('stale');
   $('status-dot').className = 'dot ' + (s.ws_connected ? 'online' : (s.has_config ? 'offline' : 'unknown'));
   if (s.ws_connected) {
     $('status-text').textContent = 'Online — connected to backend';
@@ -134,7 +148,8 @@ const setStatus = (s) => {
   } else {
     $('status-text').textContent = 'Offline — not connected';
   }
-  $('status-detail').textContent = 'Agent v' + s.version + ' · uptime ' + s.uptime_s + 's' + (s.last_command_at ? ' · last cmd ' + new Date(s.last_command_at).toLocaleTimeString() : '');
+  // Version moved to the title badge — keep this line for the volatile bits.
+  $('status-detail').textContent = 'Uptime ' + s.uptime_s + 's' + (s.last_command_at ? ' · last cmd ' + new Date(s.last_command_at).toLocaleTimeString() : '');
 
   // Pairing card: visible only while no config + we have a code to show.
   const pairCard = $('pair-card');
@@ -158,6 +173,10 @@ async function fetchStatus() {
   } catch (e) {
     $('status-dot').className = 'dot offline';
     $('status-text').textContent = 'Cannot reach agent';
+    // Flag the badge rather than leaving a version on screen that we can no
+    // longer vouch for — a stale number here would be worse than none.
+    $('version-badge').textContent = 'v?';
+    $('version-badge').classList.add('stale');
   }
 }
 async function fetchConfig() {
@@ -178,7 +197,6 @@ async function fetchConfig() {
     const d = (c.devices && c.devices[0]) || {};
     $('device_ip').value = d.ip || '';
     $('device_port').value = d.port || 10009;
-    $('device_transport').value = d.transport === 'tcp' ? 'tcp' : 'http';
   } catch (e) {}
 }
 
@@ -223,7 +241,6 @@ $('save').addEventListener('click', async () => {
         device_id: 'default',
         ip: $('device_ip').value.trim(),
         port: parseInt($('device_port').value.trim(), 10) || 10009,
-        transport: $('device_transport').value === 'tcp' ? 'tcp' : 'http',
       }],
     };
     const r = await fetch('/api/config', {

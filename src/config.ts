@@ -6,12 +6,19 @@ export interface DeviceEntry {
   device_id: string;
   ip: string;
   port: number;
-  /** POSLink wire transport. Defaults to 'http' when omitted (matches the
-   *  pre-v0.3.6 single-transport behaviour). Set 'tcp' for PAX firmwares
-   *  whose Communication menu only exposes TCP / "External" mode without a
-   *  HTTP option (most BroadPOS-TSYS builds in the field). */
-  transport?: 'http' | 'tcp';
+  /**
+   * The terminal's Secondary Port (ECR Comm Settings, default 10010).
+   *
+   * The primary port serves one transaction at a time: while a sale is waiting
+   * for a card it will not answer anything else, so an abort sent there would
+   * simply queue behind the very sale it is meant to stop. PAX exposes this
+   * second listener for exactly that out-of-band case.
+   */
+  secondary_port?: number;
 }
+
+/** ECR Comm Settings ships with Secondary Port = 10010. */
+export const DEFAULT_SECONDARY_PORT = 10010;
 
 export interface AgentConfig {
   /** wss://api.host/ws/pax-agent */
@@ -120,9 +127,6 @@ function validateConfig(c: AgentConfig, path: string): void {
   for (const d of c.devices) {
     if (!d.device_id || !d.ip || !d.port) {
       throw new Error(`Each device requires { device_id, ip, port }`);
-    }
-    if (d.transport !== undefined && d.transport !== 'http' && d.transport !== 'tcp') {
-      throw new Error(`Device "${d.device_id}".transport must be 'http' or 'tcp' (got "${d.transport}")`);
     }
     if (ids.has(d.device_id)) throw new Error(`Duplicate device_id "${d.device_id}"`);
     ids.add(d.device_id);

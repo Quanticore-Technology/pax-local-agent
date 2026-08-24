@@ -86,3 +86,30 @@ begin
   Result := True;
   // Future: check that no other instance of the service is running, etc.
 end;
+
+{ Stop and deregister the service BEFORE [Files] copies anything.
+
+  Without this an upgrade silently keeps the old binary: the running service
+  holds a lock on pax-agent.exe, Windows refuses the overwrite, and Inno skips
+  the file without failing the install. The result looks like a successful
+  upgrade — the registry even reports the new version — while the old code
+  keeps running. CloseApplications=force does not help here; it closes windowed
+  applications, not services.
+
+  install-service.bat re-registers the service afterwards in [Run], so removing
+  it here is safe on both fresh installs and upgrades. Errors are ignored: on a
+  first install there is simply no service to stop. }
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  Exec(ExpandConstant('{cmd}'), '/C sc stop GoNailsPaxAgent', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  { Service shutdown is asynchronous — sc returns as soon as the stop is
+    accepted, not when the process has exited and released the file. }
+  Sleep(4000);
+  Exec(ExpandConstant('{cmd}'), '/C sc delete GoNailsPaxAgent', '',
+       SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(1000);
+end;
