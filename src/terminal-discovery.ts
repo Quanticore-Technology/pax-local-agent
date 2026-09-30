@@ -77,28 +77,28 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 }
 
 /**
- * Returns the terminal to switch to, or null when there is no safe answer:
- * with a known serial only that terminal counts; without one, only a single
- * unambiguous responder does. `exclude` holds addresses of the other
- * configured terminals — never poke those, they may be mid-sale.
+ * Returns the terminal with the known serial, or null. Never guesses: with
+ * several terminals in a salon, "the one that answered" could be another
+ * cashier's. `exclude` holds addresses of the other configured terminals —
+ * never poke those, they may be mid-sale.
  */
 export async function discoverTerminal(opts: {
   hosts: string[];
   port: number;
-  serial?: string;
+  serial: string;
   exclude?: string[];
 }): Promise<FoundTerminal | null> {
   const hosts = opts.hosts.filter((ip) => !opts.exclude?.includes(ip));
   const open = await mapLimit(hosts, CONCURRENCY, (ip) => portOpen(ip, opts.port));
-  const found: FoundTerminal[] = [];
   for (const ip of hosts.filter((_, i) => open[i])) {
     try {
       const id = await initialize(ip, opts.port, IDENTIFY_TIMEOUT_MS);
-      if (id.resultCode === SUCCESS_CODE) found.push({ ip, serial: id.serial, model: id.model });
+      if (id.resultCode === SUCCESS_CODE && id.serial === opts.serial) {
+        return { ip, serial: id.serial, model: id.model };
+      }
     } catch {
       // Something else listens on that port; not a terminal.
     }
   }
-  if (opts.serial) return found.find((t) => t.serial === opts.serial) ?? null;
-  return found.length === 1 ? found[0] : null;
+  return null;
 }

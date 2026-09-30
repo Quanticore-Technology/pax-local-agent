@@ -1,6 +1,6 @@
 import { isIPv4 } from 'net';
 import { writeConfig } from '../config';
-import type { AgentConfig } from '../config';
+import type { AgentConfig, DeviceEntry } from '../config';
 import { CommandError } from '../command-error';
 import { ERROR_CODES } from '../protocol/messages';
 import type { SetDevicesPayload, SetDevicesResult } from '../protocol/messages';
@@ -10,8 +10,8 @@ import type { SetDevicesPayload, SetDevicesResult } from '../protocol/messages';
  *
  * Mutates the live config so the next command uses the new address without a
  * reconnect, and persists it (token and everything else untouched). Fields the
- * API does not know about (secondary_port, serial) survive for the same
- * device_id.
+ * API does not know about survive for the same device_id (secondary_port
+ * always, serial only while the address is unchanged).
  */
 export function handleSetDevices(
   config: AgentConfig,
@@ -39,12 +39,14 @@ export function handleSetDevices(
     }
   }
 
-  const devices = input.map(({ device_id, ip, port }) => ({
-    ...config.devices.find((old) => old.device_id === device_id),
-    device_id,
-    ip,
-    port,
-  }));
+  const devices = input.map(({ device_id, ip, port }) => {
+    const old = config.devices.find((d) => d.device_id === device_id);
+    const entry: DeviceEntry = { ...old, device_id, ip, port };
+    // A new address may be a different terminal; its serial is learned on the
+    // next successful check, and discovery must not hunt for the old one.
+    if (old && (old.ip !== ip || old.port !== port)) delete entry.serial;
+    return entry;
+  });
   // Persist first: if the write fails, the live config stays as it was.
   if (configPath) writeConfig({ ...config, devices }, configPath);
   config.devices = devices;

@@ -87,6 +87,49 @@ describe('terminal monitor', () => {
   });
 });
 
+describe('terminal monitor safety', () => {
+  it('never auto-switches when no serial is known', async () => {
+    const config = baseConfig([{ device_id: 'm4', ip: '127.0.0.1', port: await deadPort() }]);
+    const discover = jest.fn(async () => ({ ip: '127.0.0.2', serial: 'X', model: 'A920' }));
+    const monitor = startTerminalMonitor({ config, send: () => undefined, discover });
+    await monitor.checkNow();
+    await monitor.checkNow();
+    monitor.stop();
+    expect(discover).not.toHaveBeenCalled();
+    expect(config.devices[0].ip).toBe('127.0.0.1');
+  });
+
+  it('treats a different terminal at the configured IP as unreachable and looks for ours', async () => {
+    const mock = await startPoslinkMock({ serial: 'SN-STRANGER' });
+    const dir = tmp();
+    const configPath = join(dir, 'config.json');
+    const config = baseConfig([{ device_id: 'm5', ip: '127.0.0.1', port: mock.port, serial: 'SN-OURS' }]);
+    const sent: TerminalStatusMessage[] = [];
+    const discover = jest.fn(async () => null);
+    const monitor = startTerminalMonitor({ config, configPath, send: (m) => sent.push(m), discover });
+    await monitor.checkNow();
+    await monitor.checkNow();
+    monitor.stop();
+    await mock.close();
+    expect(sent[0].devices[0].reachable).toBe(false);
+    expect(config.devices[0].serial).toBe('SN-OURS');
+    expect(discover).toHaveBeenCalledWith(expect.objectContaining({ serial: 'SN-OURS' }), []);
+  });
+
+  it('does not write config after stop()', async () => {
+    const mock = await startPoslinkMock({ serial: 'SN-LATE' });
+    const dir = tmp();
+    const configPath = join(dir, 'config.json');
+    const config = baseConfig([{ device_id: 'm6', ip: '127.0.0.1', port: mock.port }]);
+    const monitor = startTerminalMonitor({ config, configPath, send: () => undefined });
+    const round = monitor.checkNow();
+    monitor.stop();
+    await round;
+    await mock.close();
+    expect(() => readFileSync(configPath)).toThrow();
+  });
+});
+
 describe('discovery', () => {
   it('scans the own /24, clamps wide masks to /22 and skips its own address', () => {
     const iface = (address: string, netmask: string) => ({
@@ -101,7 +144,7 @@ describe('discovery', () => {
     expect(subnetHosts(iface('10.0.5.9', '255.255.255.240'))).toHaveLength(253);
   });
 
-  it('confirms with A00 and only accepts the known serial', async () => {
+  it('confirms with A00 and only ever accepts the known serial', async () => {
     const mock = await startPoslinkMock({ serial: 'SN-A920-1' });
     const dead = await deadPort();
     const started = Date.now();
@@ -111,8 +154,8 @@ describe('discovery', () => {
       model: 'A920',
     });
     expect(await discoverTerminal({ hosts: ['127.0.0.1'], port: mock.port, serial: 'OTHER' })).toBeNull();
-    expect(await discoverTerminal({ hosts: ['127.0.0.1'], port: mock.port, exclude: ['127.0.0.1'] })).toBeNull();
-    expect(await discoverTerminal({ hosts: ['127.0.0.1'], port: dead })).toBeNull();
+    expect(await discoverTerminal({ hosts: ['127.0.0.1'], port: mock.port, serial: 'SN-A920-1', exclude: ['127.0.0.1'] })).toBeNull();
+    expect(await discoverTerminal({ hosts: ['127.0.0.1'], port: dead, serial: 'SN-A920-1' })).toBeNull();
     expect(Date.now() - started).toBeLessThan(5_000);
     await mock.close();
   });
@@ -166,5 +209,52 @@ describe('ws-client status and replay', () => {
     expect(connections[1]).not.toContain('sale_result_replay');
     const journal = JSON.parse(readFileSync(join(dir, 'sale-journal.json'), 'utf8'));
     expect(journal['ext-lost'].acked).toBe(true);
+  }, 10_000);
+});
+
+describe('ws-client handover', () => {
+  it('a sale finishing on a replaced client is replayed by the live one', async () => {
+    const mock = await startPoslinkMock({ delayMs: 400 });
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    await new Promise((r) => wss.once('listening', r));
+    const { port } = wss.address() as { port: number };
+    const dir = tmp();
+    const configPath = join(dir, 'config.json');
+    const config = baseConfig([{ device_id: 'w2', ip: '127.0.0.1', port: mock.port }]);
+    config.wss_url = `ws://127.0.0.1:${port}/ws/pax-agent`;
+
+    const sockets: Array<{ types: string[]; replays: string[] }> = [];
+    wss.on('connection', (socket) => {
+      const seen = { types: [] as string[], replays: [] as string[] };
+      sockets.push(seen);
+      if (sockets.length === 1) {
+        socket.send(JSON.stringify({
+          type: 'request',
+          id: 'r-handover',
+          command: 'pax.sale',
+          payload: { device_id: 'w2', amount_cents: 1000, external_id: 'ext-handover' },
+        }));
+      }
+      socket.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        seen.types.push(msg.type);
+        if (msg.type === 'sale_result_replay') seen.replays.push(msg.external_id);
+      });
+    });
+
+    const waitFor = async (check: () => boolean): Promise<void> => {
+      for (let i = 0; i < 60 && !check(); i++) await new Promise((r) => setTimeout(r, 50));
+    };
+    const first = startWsClient(config, 'test', { configPath });
+    await waitFor(() => mock.received.length > 0); // sale is on the terminal
+    first.stop(); // e.g. config saved in the web UI
+    const second = startWsClient(config, 'test', { configPath });
+    await waitFor(() => sockets.length >= 2 && sockets[1].replays.includes('ext-handover'));
+    second.stop();
+    wss.close();
+    await mock.close();
+
+    expect(sockets[0].types).not.toContain('response'); // old socket was closed
+    expect(sockets[1].replays).toEqual(['ext-handover']);
   }, 10_000);
 });

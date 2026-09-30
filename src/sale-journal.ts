@@ -8,9 +8,9 @@
  * answers `replay_ack`. The same record makes a retried sale return the stored
  * approval instead of charging the card a second time.
  */
-import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, writeSync } from 'fs';
+import { existsSync, readFileSync, renameSync } from 'fs';
 import { dirname, join } from 'path';
-import { ensureDir } from './config';
+import { writeFileDurable } from './config';
 import { getLogger } from './logger';
 import type { PaxResult } from './protocol/messages';
 
@@ -99,16 +99,7 @@ export class SaleJournal {
    */
   private save(): void {
     try {
-      ensureDir(dirname(this.path));
-      const tmp = `${this.path}.tmp`;
-      const fd = openSync(tmp, 'w', 0o600);
-      try {
-        writeSync(fd, JSON.stringify(this.entries, null, 2));
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
-      renameSync(tmp, this.path);
+      writeFileDurable(this.path, JSON.stringify(this.entries, null, 2));
     } catch (err) {
       logger.error({ path: this.path, err: (err as Error).message }, 'sale journal write failed');
     }

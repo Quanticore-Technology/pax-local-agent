@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import type { AgentConfig } from './config';
-import { dispatch } from './command-router';
+import { dispatch, isSaleInFlight } from './command-router';
 import { getLogger, LogRateLimiter } from './logger';
 import { SaleJournal } from './sale-journal';
 import { startTerminalMonitor } from './terminal-monitor';
@@ -38,6 +38,9 @@ export interface WsClientOptions {
   onCommand?: () => void;
 }
 
+/** The client currently in charge; a replaced one hands late sale results to it. */
+let liveClient: { replay(externalId: string): void } | null = null;
+
 /**
  * Long-lived WSS client with exponential backoff + jittered reconnect.
  * Pushes log messages back to the gateway with rate limiting.
@@ -63,9 +66,14 @@ export function startWsClient(
     send: (msg) => sendIfOpen(JSON.stringify(msg)),
   });
 
-  /** Re-send every sale result the API has not acknowledged yet. */
-  const replayJournal = (): void => {
+  /**
+   * Re-send sale results the API has not acknowledged (all, or just one).
+   * A sale still running here is skipped: its normal response is on its way,
+   * and a replay racing ahead of it would be booked as a late result.
+   */
+  const replayJournal = (only?: string): void => {
     for (const entry of journal?.unacked() ?? []) {
+      if (only ? entry.external_id !== only : isSaleInFlight(entry.external_id)) continue;
       const replay: SaleResultReplayMessage = {
         type: 'sale_result_replay',
         external_id: entry.external_id,
@@ -76,6 +84,9 @@ export function startWsClient(
       sendIfOpen(JSON.stringify(replay));
     }
   };
+
+  const self = { replay: (externalId: string) => replayJournal(externalId) };
+  liveClient = self;
 
   const connect = (): void => {
     if (stopped) return;
@@ -158,9 +169,14 @@ export function startWsClient(
     const response: ResponseMessage = await dispatch(config, msg, { configPath: opts.configPath, journal });
     sendIfOpen(JSON.stringify(response));
     // The socket this sale came in on is gone, so the API has likely forgotten
-    // the request id; the replay path is what it will apply. (If we are offline
-    // right now the journal replays on the next connect anyway.)
-    if (msg.command === 'pax.sale' && receivedOn !== connection) replayJournal();
+    // the request id; the replay path is what it will apply. If this client
+    // was replaced meanwhile (config saved in the web UI), the live one sends
+    // it. (Offline right now: the journal replays on the next connect anyway.)
+    const externalId = (msg.payload as { external_id?: string }).external_id;
+    if (msg.command === 'pax.sale' && externalId) {
+      if (liveClient !== self) liveClient?.replay(externalId);
+      else if (receivedOn !== connection) replayJournal(externalId);
+    }
     if (msg.command === 'config.set_devices' && response.success) void monitor.checkNow(true);
     // Mirror non-success responses to the cloud log stream for ops visibility.
     if (!response.success && logLimiter.allow()) {
@@ -219,6 +235,7 @@ export function startWsClient(
       stopped = true;
       stopHeartbeat();
       monitor.stop();
+      if (liveClient === self) liveClient = null;
       try {
         ws?.close(1000, 'agent shutdown');
       } catch {
