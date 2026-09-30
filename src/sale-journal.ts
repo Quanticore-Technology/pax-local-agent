@@ -45,9 +45,17 @@ export class SaleJournal {
     this.prune();
   }
 
-  /** Journal file for a given config file: same directory. */
+  private static open = new Map<string, SaleJournal>();
+
+  /**
+   * Journal for a given config file (same directory). One instance per file:
+   * a ws-client restarted mid-sale must not overwrite the old one's writes.
+   */
   static nextTo(configPath: string): SaleJournal {
-    return new SaleJournal(join(dirname(configPath), 'sale-journal.json'));
+    const path = join(dirname(configPath), 'sale-journal.json');
+    let journal = SaleJournal.open.get(path);
+    if (!journal) SaleJournal.open.set(path, (journal = new SaleJournal(path)));
+    return journal;
   }
 
   get(externalId: string): JournalEntry | undefined {

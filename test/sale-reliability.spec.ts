@@ -89,7 +89,7 @@ describe('sale idempotency and journal', () => {
     expect(first.success).toBe(true);
 
     // A fresh journal instance reads the file, as a restarted agent would.
-    const journal = SaleJournal.nextTo(join(dir, 'config.json'));
+    const journal = new SaleJournal(join(dir, 'sale-journal.json'));
     const again = await dispatch(config, { ...sale('once', 'i2'), id: 'later' }, { journal });
     expect(again).toEqual({ ...first, id: 'later' });
     expect(mock.received.filter((r) => r.command === COMMAND.DO_CREDIT)).toHaveLength(1);
@@ -125,7 +125,7 @@ describe('sale idempotency and journal', () => {
     const old = JSON.parse(readFileSync(file, 'utf8'));
     old.x2.completed_at = new Date(Date.now() - 8 * 86_400_000).toISOString();
     writeFileSync(file, JSON.stringify(old));
-    expect(SaleJournal.nextTo(join(dir, 'config.json')).get('x2')).toBeUndefined();
+    expect(new SaleJournal(file).get('x2')).toBeUndefined();
   });
 });
 

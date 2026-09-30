@@ -83,9 +83,32 @@ curl http://127.0.0.1:9876/health
 | `token` | yes | Issued by dashboard, format `pat_<base64url>` |
 | `office_id` | yes | Salon UUID |
 | `agent_id` | yes | Server-generated UUID returned at token issuance |
-| `devices` | yes | Array of `{ device_id, ip, port }` |
+| `devices` | yes | Array of `{ device_id, ip, port }`. The agent adds `serial` itself and may rewrite `ip` (see below) |
 | `health_port` | no | Default `9876` |
 | `log_dir` | no | Default `%PROGRAMDATA%\GoNails\PaxAgent\logs` |
+
+## Reliability
+
+- **One command at a time per terminal.** Commands for the same terminal queue;
+  `pax.cancel` skips the queue (secondary port). `pax.ping` answers
+  `DEVICE_BUSY` at once instead of waiting behind a sale.
+- **A sale is charged once per `external_id`.** A duplicate while it runs joins
+  it; after an approval the stored result is returned.
+- **Sale journal.** Every finished sale is written to `sale-journal.json` next to
+  `config.json` (mode 0600) before the response is sent, and re-sent as
+  `sale_result_replay` after every reconnect until the cloud answers
+  `replay_ack`. Entries are dropped after 7 days.
+- **Terminal status.** Every 30 s each terminal gets an A00 Initialize (skipped
+  while it is busy); `terminal_status` goes to the cloud after `hello`, on any
+  change, and at least every 60 s.
+- **Auto-discovery.** After two failed checks the agent scans its own subnet
+  (/24, at most /22) for port 10009, confirms with A00, and switches only to the
+  terminal with the remembered serial (or the only terminal found if no serial
+  is known yet). The new IP is saved to config and reported with
+  `discovered: true`.
+- **Receipts.** With `print_receipt`, an approved sale prints a customer receipt
+  on the terminal (A60). A print failure is reported as `receipt_error` and never
+  fails the sale.
 
 ## Logs
 

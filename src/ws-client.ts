@@ -2,11 +2,13 @@ import WebSocket from 'ws';
 import type { AgentConfig } from './config';
 import { dispatch } from './command-router';
 import { getLogger, LogRateLimiter } from './logger';
+import { SaleJournal } from './sale-journal';
+import { startTerminalMonitor } from './terminal-monitor';
 import {
-  AgentMessage,
   HelloMessage,
   PROTOCOL_VERSION,
   ResponseMessage,
+  SaleResultReplayMessage,
   ServerMessage,
 } from './protocol/messages';
 
@@ -30,6 +32,10 @@ export interface WsClientOptions {
   /** Called when the server has rejected our token N times in a row. The
    *  orchestrator typically responds by deleting config + restarting pairing. */
   onAuthFail?: (consecutiveCount: number) => void;
+  /** Config file in use: set_devices and discovery save to it, the sale journal lives next to it. */
+  configPath?: string;
+  /** Called whenever a command arrives (feeds last_command_at in /health). */
+  onCommand?: () => void;
 }
 
 /**
@@ -47,7 +53,29 @@ export function startWsClient(
   let pingTimer: NodeJS.Timeout | null = null;
   let consecutiveAuthFails = 0;
   let authFailFired = false;
+  /** Bumped on every open, to tell whether a request outlived its socket. */
+  let connection = 0;
   const logLimiter = new LogRateLimiter(60);
+  const journal = opts.configPath ? SaleJournal.nextTo(opts.configPath) : undefined;
+  const monitor = startTerminalMonitor({
+    config,
+    configPath: opts.configPath,
+    send: (msg) => sendIfOpen(JSON.stringify(msg)),
+  });
+
+  /** Re-send every sale result the API has not acknowledged yet. */
+  const replayJournal = (): void => {
+    for (const entry of journal?.unacked() ?? []) {
+      const replay: SaleResultReplayMessage = {
+        type: 'sale_result_replay',
+        external_id: entry.external_id,
+        request_id: entry.request_id,
+        result: entry.result,
+        completed_at: entry.completed_at,
+      };
+      sendIfOpen(JSON.stringify(replay));
+    }
+  };
 
   const connect = (): void => {
     if (stopped) return;
@@ -58,6 +86,7 @@ export function startWsClient(
 
     ws.on('open', () => {
       reconnectAttempt = 0;
+      connection++;
       const hello: HelloMessage = {
         type: 'hello',
         agent_id: config.agent_id,
@@ -68,6 +97,8 @@ export function startWsClient(
       ws!.send(JSON.stringify(hello));
       logger.info('ws connected, hello sent');
       startHeartbeat();
+      void monitor.checkNow(true);
+      replayJournal();
     });
 
     ws.on('message', (raw) => onMessage(raw.toString()));
@@ -114,12 +145,23 @@ export function startWsClient(
       return;
     }
     if (msg.type === 'heartbeat') return;
+    if (msg.type === 'replay_ack') {
+      journal?.ack(msg.external_id);
+      return;
+    }
     if (msg.type !== 'request') {
       logger.warn({ type: (msg as { type?: string }).type }, 'unknown server message type');
       return;
     }
-    const response: ResponseMessage = await dispatch(config, msg);
+    opts.onCommand?.();
+    const receivedOn = connection;
+    const response: ResponseMessage = await dispatch(config, msg, { configPath: opts.configPath, journal });
     sendIfOpen(JSON.stringify(response));
+    // The socket this sale came in on is gone, so the API has likely forgotten
+    // the request id; the replay path is what it will apply. (If we are offline
+    // right now the journal replays on the next connect anyway.)
+    if (msg.command === 'pax.sale' && receivedOn !== connection) replayJournal();
+    if (msg.command === 'config.set_devices' && response.success) void monitor.checkNow(true);
     // Mirror non-success responses to the cloud log stream for ops visibility.
     if (!response.success && logLimiter.allow()) {
       sendIfOpen(JSON.stringify({
@@ -176,6 +218,7 @@ export function startWsClient(
     stop(): void {
       stopped = true;
       stopHeartbeat();
+      monitor.stop();
       try {
         ws?.close(1000, 'agent shutdown');
       } catch {
