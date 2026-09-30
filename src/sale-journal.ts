@@ -23,6 +23,12 @@ export interface JournalEntry {
   completed_at: string;
   /** API confirmed it has this result; kept only so a retry cannot charge twice. */
   acked?: boolean;
+  /**
+   * The normal response went out on the socket the request came in on, so the
+   * API has it (or its late-response path does). Needs no replay: replaying
+   * every sale would pile up, because the API never acks normal responses.
+   */
+  delivered?: boolean;
 }
 
 export class SaleJournal {
@@ -78,9 +84,17 @@ export class SaleJournal {
     this.save();
   }
 
+  delivered(externalId: string): void {
+    const entry = this.entries[externalId];
+    if (!entry || entry.delivered) return;
+    entry.delivered = true;
+    this.save();
+  }
+
+  /** Results the API may never have seen: not acked, not delivered normally. */
   unacked(): Array<{ external_id: string } & JournalEntry> {
     return Object.entries(this.entries)
-      .filter(([, e]) => !e.acked)
+      .filter(([, e]) => !e.acked && !e.delivered)
       .map(([external_id, e]) => ({ external_id, ...e }));
   }
 

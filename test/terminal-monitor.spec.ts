@@ -196,7 +196,7 @@ describe('ws-client status and replay', () => {
 
     const client = startWsClient(config, 'test', { configPath });
     const waitFor = async (check: () => boolean): Promise<void> => {
-      for (let i = 0; i < 100 && !check(); i++) await new Promise((r) => setTimeout(r, 50));
+      for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 50));
     };
     await waitFor(() => connections.length >= 2 && connections[1].includes('terminal_status'));
     client.stop();
@@ -209,7 +209,7 @@ describe('ws-client status and replay', () => {
     expect(connections[1]).not.toContain('sale_result_replay');
     const journal = JSON.parse(readFileSync(join(dir, 'sale-journal.json'), 'utf8'));
     expect(journal['ext-lost'].acked).toBe(true);
-  }, 10_000);
+  }, 15_000);
 });
 
 describe('ws-client handover', () => {
@@ -257,4 +257,83 @@ describe('ws-client handover', () => {
     expect(sockets[0].types).not.toContain('response'); // old socket was closed
     expect(sockets[1].replays).toEqual(['ext-handover']);
   }, 10_000);
+});
+
+describe('ws-client replay pacing', () => {
+  it('waits after open, sends at most 5 at a time, and never replays a delivered response', async () => {
+    const mock = await startPoslinkMock();
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    await new Promise((r) => wss.once('listening', r));
+    const { port } = wss.address() as { port: number };
+    const dir = tmp();
+    const now = new Date().toISOString();
+    const journal: Record<string, unknown> = {};
+    for (let i = 0; i < 12; i++) {
+      journal[`ext-${i}`] = { request_id: `r-${i}`, result: { result_code: '000000' }, completed_at: now };
+    }
+    journal['ext-delivered'] = { request_id: 'r-d', result: { result_code: '000000' }, completed_at: now, delivered: true };
+    writeFileSync(join(dir, 'sale-journal.json'), JSON.stringify(journal));
+    const config = baseConfig([{ device_id: 'w3', ip: '127.0.0.1', port: mock.port }]);
+    config.wss_url = `ws://127.0.0.1:${port}/ws/pax-agent`;
+
+    let openedAt = 0;
+    const frames: Array<{ type: string; at: number; id?: string }> = [];
+    wss.on('connection', (socket) => {
+      openedAt = Date.now();
+      socket.on('message', (raw) => {
+        const msg = JSON.parse(raw.toString());
+        frames.push({ type: msg.type, at: Date.now() - openedAt, id: msg.external_id });
+      });
+    });
+
+    const client = startWsClient(config, 'test', { configPath: join(dir, 'config.json') });
+    for (let i = 0; i < 120 && frames.filter((f) => f.type === 'sale_result_replay').length < 12; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    client.stop();
+    wss.close();
+    await mock.close();
+
+    const replays = frames.filter((f) => f.type === 'sale_result_replay');
+    expect(replays).toHaveLength(12);
+    expect(replays.map((r) => r.id)).not.toContain('ext-delivered');
+    // Nothing but hello (+ status) in the first ~2 s, when the gateway counts frames.
+    expect(frames.filter((f) => f.at < 1_900).every((f) => f.type !== 'sale_result_replay')).toBe(true);
+    // Batches of 5, a gap apart.
+    const batches = [replays.slice(0, 5), replays.slice(5, 10), replays.slice(10)];
+    expect(batches[1][0].at - batches[0][4].at).toBeGreaterThanOrEqual(900);
+    expect(batches[2][0].at - batches[1][4].at).toBeGreaterThanOrEqual(900);
+  }, 15_000);
+
+  it('marks a sale answered on its own live socket as delivered, so it is not replayed', async () => {
+    const mock = await startPoslinkMock();
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    await new Promise((r) => wss.once('listening', r));
+    const { port } = wss.address() as { port: number };
+    const dir = tmp();
+    const config = baseConfig([{ device_id: 'w4', ip: '127.0.0.1', port: mock.port }]);
+    config.wss_url = `ws://127.0.0.1:${port}/ws/pax-agent`;
+
+    let responded = false;
+    wss.on('connection', (socket) => {
+      socket.send(JSON.stringify({
+        type: 'request',
+        id: 'r-live',
+        command: 'pax.sale',
+        payload: { device_id: 'w4', amount_cents: 500, external_id: 'ext-live' },
+      }));
+      socket.on('message', (raw) => {
+        if (JSON.parse(raw.toString()).type === 'response') responded = true;
+      });
+    });
+    const client = startWsClient(config, 'test', { configPath: join(dir, 'config.json') });
+    for (let i = 0; i < 60 && !responded; i++) await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 100));
+    client.stop();
+    wss.close();
+    await mock.close();
+
+    const saved = JSON.parse(readFileSync(join(dir, 'sale-journal.json'), 'utf8'));
+    expect(saved['ext-live'].delivered).toBe(true);
+  });
 });

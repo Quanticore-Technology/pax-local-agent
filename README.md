@@ -97,9 +97,12 @@ curl http://127.0.0.1:9876/health
 - **A sale is charged once per `external_id`.** A duplicate while it runs joins
   it; after an approval the stored result is returned.
 - **Sale journal.** Every finished sale is written to `sale-journal.json` next to
-  `config.json` (mode 0600) before the response is sent, and re-sent as
+  `config.json` (mode 0600) before the response is sent. Results whose response
+  did not go out on the socket the request came in on are re-sent as
   `sale_result_replay` after every reconnect until the cloud answers
-  `replay_ack`. Entries are dropped after 7 days.
+  `replay_ack` — starting 2 s after connect, 5 at a time, 1 s apart (the gateway
+  drops a socket that floods it before the token check). Entries are dropped
+  after 7 days.
 - **Terminal status.** Every 30 s each terminal gets an A00 Initialize (skipped
   while it is busy); `terminal_status` goes to the cloud after `hello`, on any
   change, and at least every 60 s.

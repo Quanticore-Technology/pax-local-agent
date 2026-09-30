@@ -2,7 +2,7 @@ import WebSocket from 'ws';
 import type { AgentConfig } from './config';
 import { dispatch, isSaleInFlight } from './command-router';
 import { getLogger, LogRateLimiter } from './logger';
-import { SaleJournal } from './sale-journal';
+import { JournalEntry, SaleJournal } from './sale-journal';
 import { startTerminalMonitor } from './terminal-monitor';
 import {
   HelloMessage,
@@ -20,6 +20,11 @@ const AUTH_FAIL_CLOSE_CODE = 4003;
 // 3 consecutive auth-fail closes before triggering recovery — debounces a
 // single transient backend hiccup, but covers an Owner pressing Revoke.
 const AUTH_FAIL_THRESHOLD = 3;
+// Replay pacing: the gateway drops a socket that sends >10 frames before its
+// token check finishes.
+const REPLAY_DELAY_MS = 2_000;
+const REPLAY_BATCH = 5;
+const REPLAY_GAP_MS = 1_000;
 
 export interface WsClientHandle {
   /** Stop reconnecting and close the socket. */
@@ -66,26 +71,43 @@ export function startWsClient(
     send: (msg) => sendIfOpen(JSON.stringify(msg)),
   });
 
-  /**
-   * Re-send sale results the API has not acknowledged (all, or just one).
-   * A sale still running here is skipped: its normal response is on its way,
-   * and a replay racing ahead of it would be booked as a late result.
-   */
-  const replayJournal = (only?: string): void => {
-    for (const entry of journal?.unacked() ?? []) {
-      if (only ? entry.external_id !== only : isSaleInFlight(entry.external_id)) continue;
-      const replay: SaleResultReplayMessage = {
-        type: 'sale_result_replay',
-        external_id: entry.external_id,
-        request_id: entry.request_id,
-        result: entry.result,
-        completed_at: entry.completed_at,
-      };
-      sendIfOpen(JSON.stringify(replay));
-    }
+  const sendReplay = (entry: { external_id: string } & JournalEntry): void => {
+    const replay: SaleResultReplayMessage = {
+      type: 'sale_result_replay',
+      external_id: entry.external_id,
+      request_id: entry.request_id,
+      result: entry.result,
+      completed_at: entry.completed_at,
+    };
+    sendIfOpen(JSON.stringify(replay));
   };
 
-  const self = { replay: (externalId: string) => replayJournal(externalId) };
+  /** Re-send one sale result right away (its socket is gone, or it finished on a replaced client). */
+  const replayOne = (externalId: string): void => {
+    const entry = journal?.unacked().find((e) => e.external_id === externalId);
+    if (entry) sendReplay(entry);
+  };
+
+  /**
+   * Re-send everything the API may have missed, paced: the gateway closes the
+   * socket (1009) when more than 10 frames arrive before it has checked the
+   * token, so wait a moment after open and send a few at a time. A sale still
+   * running here is skipped: its normal response is on its way, and a replay
+   * racing ahead of it would be booked as a late result.
+   */
+  const scheduleReplay = (conn: number): void => {
+    const timer = setTimeout(async () => {
+      const pending = (journal?.unacked() ?? []).filter((e) => !isSaleInFlight(e.external_id));
+      for (let i = 0; i < pending.length; i += REPLAY_BATCH) {
+        if (stopped || conn !== connection || ws?.readyState !== WebSocket.OPEN) return;
+        pending.slice(i, i + REPLAY_BATCH).forEach(sendReplay);
+        await new Promise((r) => setTimeout(r, REPLAY_GAP_MS).unref?.());
+      }
+    }, REPLAY_DELAY_MS);
+    timer.unref?.();
+  };
+
+  const self = { replay: replayOne };
   liveClient = self;
 
   const connect = (): void => {
@@ -109,7 +131,7 @@ export function startWsClient(
       logger.info('ws connected, hello sent');
       startHeartbeat();
       void monitor.checkNow(true);
-      replayJournal();
+      scheduleReplay(connection);
     });
 
     ws.on('message', (raw) => onMessage(raw.toString()));
@@ -167,15 +189,19 @@ export function startWsClient(
     opts.onCommand?.();
     const receivedOn = connection;
     const response: ResponseMessage = await dispatch(config, msg, { configPath: opts.configPath, journal });
-    sendIfOpen(JSON.stringify(response));
+    const externalId = (msg.payload as { external_id?: string }).external_id;
+    const isSale = msg.command === 'pax.sale' && !!externalId;
+    sendIfOpen(JSON.stringify(response), () => {
+      // Written to the same socket the request came in on: the API has it.
+      if (isSale && receivedOn === connection && liveClient === self) journal?.delivered(externalId!);
+    });
     // The socket this sale came in on is gone, so the API has likely forgotten
     // the request id; the replay path is what it will apply. If this client
     // was replaced meanwhile (config saved in the web UI), the live one sends
     // it. (Offline right now: the journal replays on the next connect anyway.)
-    const externalId = (msg.payload as { external_id?: string }).external_id;
-    if (msg.command === 'pax.sale' && externalId) {
-      if (liveClient !== self) liveClient?.replay(externalId);
-      else if (receivedOn !== connection) replayJournal(externalId);
+    if (isSale) {
+      if (liveClient !== self) liveClient?.replay(externalId!);
+      else if (receivedOn !== connection) replayOne(externalId!);
     }
     if (msg.command === 'config.set_devices' && response.success) void monitor.checkNow(true);
     // Mirror non-success responses to the cloud log stream for ops visibility.
@@ -218,10 +244,13 @@ export function startWsClient(
     }
   };
 
-  const sendIfOpen = (data: string): void => {
+  /** `onSent` runs once the frame was written to the socket without error. */
+  const sendIfOpen = (data: string, onSent?: () => void): void => {
     if (ws?.readyState === WebSocket.OPEN) {
       try {
-        ws.send(data);
+        ws.send(data, (err) => {
+          if (!err) onSent?.();
+        });
       } catch (err) {
         logger.warn({ err: (err as Error).message }, 'ws send failed');
       }
