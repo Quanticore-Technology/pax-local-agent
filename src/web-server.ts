@@ -6,9 +6,12 @@
  *   GET  /api/config    → current config, sanitized (token replaced with preview)
  *   POST /api/config    → validate + write + trigger ws-client restart
  *
- * Bound to 127.0.0.1 — never reachable from the salon LAN.
+ * Bound to 127.0.0.1 — never reachable from the salon LAN. Binding alone
+ * doesn't stop a web page open in the salon PC's browser from calling it,
+ * so every request must also pass `isTrustedRequest`.
  */
 import { createServer, IncomingMessage, ServerResponse, Server } from 'http';
+import { AddressInfo } from 'net';
 import { AgentConfig, defaultConfigPath, writeConfig } from './config';
 import { getLogger } from './logger';
 import { CONFIG_UI_HTML } from './web-ui-html';
@@ -29,11 +32,41 @@ export interface AgentState {
 }
 
 export function startWebServer(port: number, version: string, state: AgentState): Server {
-  const server = createServer((req, res) => handle(req, res, version, state));
+  const server = createServer((req, res) => {
+    if (!isTrustedRequest(req, (server.address() as AddressInfo).port)) {
+      logger.warn({ host: req.headers.host, origin: req.headers.origin, url: req.url }, 'blocked non-local web request');
+      return sendJson(res, 403, { error: 'Forbidden' });
+    }
+    return handle(req, res, version, state);
+  });
   server.listen(port, '127.0.0.1', () => {
     logger.info({ port }, 'web server listening on 127.0.0.1');
   });
   return server;
+}
+
+/**
+ * Any website the salon PC visits can send requests to 127.0.0.1. Without
+ * these checks one could re-point `wss_url` at its own server and receive
+ * the agent's token, or wipe the pairing.
+ *
+ * - Host must be our own loopback name: stops DNS rebinding, where an
+ *   attacker's hostname resolves to 127.0.0.1 and reads our responses.
+ * - POSTs must be JSON: a cross-site JSON POST needs a CORS preflight we
+ *   never answer, so the browser never sends it.
+ * - If the browser says where the request came from (Origin), it must be
+ *   this page. Local tools (curl, PowerShell) send no Origin and stay allowed.
+ */
+export function isTrustedRequest(req: IncomingMessage, port: number): boolean {
+  const own = [`127.0.0.1:${port}`, `localhost:${port}`];
+  if (!own.includes(String(req.headers.host ?? '').toLowerCase())) return false;
+  const origin = req.headers.origin;
+  if (origin && !own.some((h) => origin.toLowerCase() === `http://${h}`)) return false;
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const type = String(req.headers['content-type'] ?? '').toLowerCase();
+    if (!type.startsWith('application/json')) return false;
+  }
+  return true;
 }
 
 async function handle(req: IncomingMessage, res: ServerResponse, version: string, state: AgentState): Promise<void> {
@@ -110,7 +143,12 @@ async function handleSaveConfig(req: IncomingMessage, res: ServerResponse, state
     return sendJson(res, 400, { error: 'Invalid JSON' });
   }
 
-  // Empty token → keep existing (allows updating other fields without re-pasting).
+  // Empty token → keep existing (allows updating other fields without re-pasting),
+  // but never carry the saved token to a different server.
+  const keepsServer = !payload.wss_url || payload.wss_url === state.config?.wss_url;
+  if (!payload.token && !keepsServer) {
+    return sendJson(res, 400, { error: 'Changing the server address needs a new token (pair again)' });
+  }
   const effectiveToken =
     payload.token && payload.token.length > 0 ? payload.token : state.config?.token;
   if (!effectiveToken) {
@@ -118,7 +156,7 @@ async function handleSaveConfig(req: IncomingMessage, res: ServerResponse, state
   }
 
   const newConfig: AgentConfig = {
-    wss_url: payload.wss_url ?? '',
+    wss_url: payload.wss_url || state.config?.wss_url || '',
     token: effectiveToken,
     office_id: payload.office_id ?? '',
     agent_id: payload.agent_id ?? '',
