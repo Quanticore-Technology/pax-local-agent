@@ -77,6 +77,18 @@ export function toInvoiceNumber(externalId: string): string {
 }
 
 /**
+ * ReferenceNumber for the trace group. A constant "1" on every request let the
+ * terminal (and its batch report) confuse one transaction with another, so it
+ * is derived from our own id instead: the same fold as the invoice number,
+ * last 8 digits, leading zeros dropped. Sales use external_id, so a retried
+ * sale keeps its reference; other commands use the request id.
+ */
+export function toReferenceNumber(id: string): string {
+  const folded = toInvoiceNumber(id).slice(-8).replace(/^0+/, '');
+  return folded || '1'; // an all-zero fold is not a usable reference
+}
+
+/**
  * `additionalInformation` is the one group the terminal reads by NAME rather
  * than by position: every entry is `KEY=VALUE`, and a key we don't send is
  * simply absent — no placeholder needed. Key names come from PAX's sample
@@ -100,8 +112,7 @@ export function buildCreditGroups(fields: CreditRequestFields): PacketGroup[] {
   }
 
   const trace = emptyGroup(TRACE_FIELDS);
-  // The sample defaults ReferenceNumber to "1" when the operator leaves it
-  // blank; the terminal only uses it to echo the request back to us.
+  // Callers pass toReferenceNumber(); "1" is PAX's sample default.
   trace[TRACE_REFERENCE] = fields.referenceNumber ?? '1';
   if (fields.invoiceNumber) {
     trace[TRACE_INVOICE] = toInvoiceNumber(fields.invoiceNumber);

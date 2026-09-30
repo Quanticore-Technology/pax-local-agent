@@ -50,7 +50,28 @@ const AMOUNT_APPROVED = 0;
 const AMOUNT_TIP = 2;
 
 const ACCOUNT_MASKED_PAN = 0;
+const ACCOUNT_ENTRY_MODE = 1;
 const ACCOUNT_CARD_TYPE = 6;
+
+/** POSLink CardType codes. Anything else stays unnamed rather than guessed. */
+const CARD_BRANDS: Record<string, string> = {
+  '01': 'Visa',
+  '02': 'Mastercard',
+  '03': 'Amex',
+  '04': 'Discover',
+  '05': 'Diners Club',
+  '06': 'enRoute',
+  '07': 'JCB',
+};
+
+/**
+ * Chip fields worth keeping from the additional-information group. A whitelist,
+ * not a blacklist: that group can also carry card data we must never forward.
+ */
+const EMV_KEYS = new Set(['AID', 'APPLAB', 'APPPN', 'TC', 'ARQC', 'TVR', 'TSI', 'ATC', 'IAD', 'CVM', 'ARC']);
+
+/** Groups from here on are after the fixed DoCredit layout (additional info lives here). */
+const FIRST_TRAILING_GROUP = 10;
 
 const TRACE_TRANSACTION_NUMBER = 0;
 const TRACE_REFERENCE_NUMBER = 1;
@@ -175,6 +196,7 @@ export function toPaxResult(parsed: ParsedResponse, baseAmountCents: number): Pa
   const hostReferenceNumber = subField(parsed, RSP.HOST_INFO, HOST_REFERENCE_NUMBER);
   const cardType = subField(parsed, RSP.ACCOUNT_INFO, ACCOUNT_CARD_TYPE);
   const lastFour = lastFourOf(subField(parsed, RSP.ACCOUNT_INFO, ACCOUNT_MASKED_PAN));
+  const emv = emvOf(parsed);
 
   return {
     result_code: resultCode,
@@ -198,7 +220,30 @@ export function toPaxResult(parsed: ParsedResponse, baseAmountCents: number): Pa
       lastFour,
       approvedAmount: String(approvedCents),
     },
+    card_brand: CARD_BRANDS[cardType],
+    emv: Object.keys(emv).length ? emv : undefined,
   };
+}
+
+/**
+ * Pull whitelisted KEY=VALUE entries out of the response's additional
+ * information. Its group index shifts with protocol version, so every trailing
+ * group is scanned; only whitelisted keys survive.
+ */
+function emvOf(parsed: ParsedResponse): Record<string, string> {
+  const emv: Record<string, string> = {};
+  for (const group of parsed.fields.slice(FIRST_TRAILING_GROUP)) {
+    for (const entry of Array.isArray(group) ? group : [group]) {
+      const eq = entry.indexOf('=');
+      if (eq <= 0) continue;
+      const key = entry.slice(0, eq).toUpperCase();
+      const value = entry.slice(eq + 1);
+      if (EMV_KEYS.has(key) && value) emv[key] = value;
+    }
+  }
+  const entryMode = subField(parsed, RSP.ACCOUNT_INFO, ACCOUNT_ENTRY_MODE);
+  if (entryMode) emv.ENTRY_MODE = entryMode;
+  return emv;
 }
 
 export { SUCCESS_CODE as PAX_SUCCESS_CODE };

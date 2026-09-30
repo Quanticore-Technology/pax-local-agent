@@ -26,6 +26,8 @@ export interface PoslinkMockOptions {
   delayMs?: number;
   /** Corrupt the trailing LRC so we can assert the client tolerates it. */
   breakLrc?: boolean;
+  /** Serial number reported by A00. */
+  serial?: string;
 }
 
 export interface PoslinkMockHandle {
@@ -33,6 +35,8 @@ export interface PoslinkMockHandle {
   port: number;
   /** Every request packet the mock decoded, in arrival order. */
   received: Array<{ command: string; fields: Array<string | string[]> }>;
+  /** Most requests the mock was ever handling at the same moment. */
+  maxConcurrent: number;
   close(): Promise<void>;
 }
 
@@ -55,7 +59,10 @@ export function buildMockResponse(groups: Array<string | string[]>, breakLrc = f
  * Response shapes mirror PAX's sample: Status, Command, Version, ResponseCode,
  * ResponseMessage, then command-specific groups.
  */
-function defaultResponse(command: string): Buffer {
+function defaultResponse(command: string, serial = 'MOCKSN123456'): Buffer {
+  if (command === COMMAND.PRINT) {
+    return buildMockResponse(['0', COMMAND.PRINT, PROTOCOL_VERSION, SUCCESS_CODE, 'OK']);
+  }
   if (command === COMMAND.INITIALIZE) {
     return buildMockResponse([
       '0',
@@ -63,7 +70,7 @@ function defaultResponse(command: string): Buffer {
       PROTOCOL_VERSION,
       SUCCESS_CODE,
       'OK',
-      'MOCKSN123456', // SN
+      serial, // SN
       'A920', // ModelName
       '1.0.0', // OSVersion
       '00:11:22:33:44:55', // MacAddress
@@ -84,9 +91,14 @@ function defaultResponse(command: string): Buffer {
       ['4500', '', '500', '', '', '', '', ''],
       // AccountInformation: Account, EntryMode, ExpireDate, EBT, Voucher,
       // NewAccountNo, CardType, CardHolder, CVDApproval, CVDMessage, Present
-      ['************4242', '1', '', '', '', '', 'VISA', '', '', '', '1'],
+      ['************4242', '4', '', '', '', '', '01', '', '', '', '1'],
       // TraceInformation: TransactionNumber, ReferenceNumber, TimeStamp
       ['123', '1', '20260811090000'],
+      '', // AVSInformation
+      '', // CommercialInformation
+      '', // motoEcommerce
+      // AdditionalInformation: KEY=VALUE; PAN is here to prove it is filtered out
+      ['AID=A0000000031010', 'APPLAB=VISA CREDIT', 'TC=1A2B3C4D', 'TVR=0000008000', 'TSI=E800', 'PAN=4111111111114242'],
     ]);
   }
 
@@ -95,6 +107,8 @@ function defaultResponse(command: string): Buffer {
 
 export async function startPoslinkMock(opts: PoslinkMockOptions = {}): Promise<PoslinkMockHandle> {
   const received: PoslinkMockHandle['received'] = [];
+  let active = 0;
+  const stats = { maxConcurrent: 0 };
 
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== 'GET') {
@@ -117,8 +131,11 @@ export async function startPoslinkMock(opts: PoslinkMockOptions = {}): Promise<P
       return;
     }
 
+    active++;
+    stats.maxConcurrent = Math.max(stats.maxConcurrent, active);
     const respond = (): void => {
-      const body = opts.override?.[command] ?? defaultResponse(command);
+      active--;
+      const body = opts.override?.[command] ?? defaultResponse(command, opts.serial);
       res.statusCode = 200;
       res.setHeader('Content-Type', 'application/octet-stream');
       res.end(
@@ -139,6 +156,9 @@ export async function startPoslinkMock(opts: PoslinkMockOptions = {}): Promise<P
         url: `http://127.0.0.1:${port}`,
         port,
         received,
+        get maxConcurrent() {
+          return stats.maxConcurrent;
+        },
         close: () =>
           new Promise<void>((done) => {
             server.close(() => done());

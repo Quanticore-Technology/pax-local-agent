@@ -1,7 +1,7 @@
 import { sendCommand, toPaxResult } from '../pax-client';
 import { getLogger } from '../logger';
 import { COMMAND, TRANS_TYPE } from '../poslink-protocol';
-import { buildCreditGroups, toInvoiceNumber } from '../poslink-credit-request';
+import { buildCreditGroups, toInvoiceNumber, toReferenceNumber } from '../poslink-credit-request';
 import type { DeviceEntry } from '../config';
 import type { PaxResult, SalePayload } from '../protocol/messages';
 
@@ -19,6 +19,7 @@ export async function handleSale(device: DeviceEntry, payload: SalePayload): Pro
     transactionType: TRANS_TYPE.SALE,
     amountCents: payload.amount_cents,
     invoiceNumber: payload.external_id,
+    referenceNumber: toReferenceNumber(payload.external_id),
     tipPrompt: true,
   });
 

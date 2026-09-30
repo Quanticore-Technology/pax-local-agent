@@ -1,6 +1,6 @@
 import { sendCommand } from '../pax-client';
 import { getLogger } from '../logger';
-import { COMMAND, SUCCESS_CODE, subField } from '../poslink-protocol';
+import { COMMAND, subField } from '../poslink-protocol';
 import { DEFAULT_SECONDARY_PORT } from '../config';
 import type { DeviceEntry } from '../config';
 import type { PaxResult } from '../protocol/messages';
@@ -53,7 +53,8 @@ export async function handleCancel(device: DeviceEntry): Promise<PaxResult> {
     );
 
     return {
-      result_code: resultCode || SUCCESS_CODE,
+      // A reply without a response code is not a success.
+      result_code: resultCode || 'NO_RESPONSE_CODE',
       result_text: resultText,
       ref_num: '',
       auth_code: '',

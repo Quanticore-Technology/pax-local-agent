@@ -15,6 +15,8 @@ export interface DeviceEntry {
    * second listener for exactly that out-of-band case.
    */
   secondary_port?: number;
+  /** Last serial number the terminal reported; lets auto-discovery pick the same terminal after a DHCP change. */
+  serial?: string;
 }
 
 /** ECR Comm Settings ships with Secondary Port = 10010. */

@@ -6,7 +6,13 @@ import {
   PaxResult,
   RequestMessage,
   ResponseMessage,
+  SalePayload,
+  SetDevicesPayload,
+  SetDevicesResult,
 } from './protocol/messages';
+import { SUCCESS_CODE } from './poslink-protocol';
+import { isBusy, runExclusive } from './terminal-queue';
+import type { SaleJournal } from './sale-journal';
 import { handleSale } from './commands/sale';
 import { handleVoid } from './commands/void';
 import { handleRefund } from './commands/refund';
@@ -14,6 +20,8 @@ import { handleTipAdjust } from './commands/tip-adjust';
 import { handleBatchClose } from './commands/batch-close';
 import { handlePing } from './commands/ping';
 import { handleCancel } from './commands/cancel';
+import { handleSetDevices } from './commands/set-devices';
+import { printReceipt } from './commands/print-receipt';
 
 const logger = getLogger();
 
@@ -35,18 +43,38 @@ function resolveDevice(config: AgentConfig, deviceId: string | undefined): Devic
   return found;
 }
 
+export interface DispatchContext {
+  /** Where config.set_devices persists; omitted in tests. */
+  configPath?: string;
+  /** Sale results journal; omitted in tests that don't care about persistence. */
+  journal?: SaleJournal;
+}
+
+// The API answers a sale at 180s. Whatever the sale leaves of that budget is
+// all a receipt print may use, so a slow printer can't make the response late.
+const SALE_BUDGET_MS = 178_000;
+const PRINT_MAX_MS = 15_000;
+const PRINT_MIN_MS = 3_000;
+
+/** Sales currently running, by external_id: a duplicate request joins the same promise. */
+const salesInFlight = new Map<string, Promise<PaxResult>>();
+
 /**
  * Dispatch one server-issued request, return a properly-shaped response.
  * All errors are caught and mapped to ResponseError so the gateway never sees
  * an unhandled rejection (which would silently leave the cloud caller hanging
  * until its 180s timeout).
  */
-export async function dispatch(config: AgentConfig, msg: RequestMessage): Promise<ResponseMessage> {
+export async function dispatch(
+  config: AgentConfig,
+  msg: RequestMessage,
+  ctx: DispatchContext = {},
+): Promise<ResponseMessage> {
   const startedAt = Date.now();
   try {
-    const result = await runCommand(config, msg);
+    const result = await runCommand(config, msg, ctx);
     logger.info(
-      { id: msg.id, command: msg.command, ms: Date.now() - startedAt, code: result.result_code },
+      { id: msg.id, command: msg.command, ms: Date.now() - startedAt, code: (result as PaxResult).result_code },
       'command success',
     );
     return { type: 'response', id: msg.id, success: true, result };
@@ -63,26 +91,100 @@ export async function dispatch(config: AgentConfig, msg: RequestMessage): Promis
   }
 }
 
-async function runCommand(config: AgentConfig, msg: RequestMessage): Promise<PaxResult> {
+async function runCommand(
+  config: AgentConfig,
+  msg: RequestMessage,
+  ctx: DispatchContext,
+): Promise<PaxResult | SetDevicesResult> {
+  if (msg.command === 'config.set_devices') {
+    return handleSetDevices(config, ctx.configPath, msg.payload as SetDevicesPayload);
+  }
+
   const deviceId = (msg.payload as { device_id?: string }).device_id;
+  const device = resolveDevice(config, deviceId);
+  // Queued commands look the device up again when their turn comes, so an
+  // address changed by config.set_devices meanwhile is used straight away.
+  const queued = (fn: (d: DeviceEntry) => Promise<PaxResult>): Promise<PaxResult> =>
+    runExclusive(device.device_id, () => fn(resolveDevice(config, device.device_id)));
+
   switch (msg.command) {
     case 'pax.sale':
-      return handleSale(resolveDevice(config, deviceId), msg.payload as any);
+      return runSale(config, device.device_id, msg, ctx);
     case 'pax.void':
-      return handleVoid(resolveDevice(config, deviceId), msg.payload as any);
+      return queued((d) => handleVoid(d, msg.payload as any, msg.id));
     case 'pax.refund':
-      return handleRefund(resolveDevice(config, deviceId), msg.payload as any);
+      return queued((d) => handleRefund(d, msg.payload as any, msg.id));
     case 'pax.tip_adjust':
-      return handleTipAdjust(resolveDevice(config, deviceId), msg.payload as any);
+      return queued((d) => handleTipAdjust(d, msg.payload as any, msg.id));
     case 'pax.batch_close':
-      return handleBatchClose(resolveDevice(config, deviceId), msg.payload as any);
+      return queued((d) => handleBatchClose(d, msg.payload as any));
     case 'pax.ping':
-      return handlePing(resolveDevice(config, deviceId));
+      // The API gives ping 5s; waiting behind a 3-minute sale would only time
+      // out. A running command already proves the terminal is there.
+      if (isBusy(device.device_id)) {
+        throw new CommandError(ERROR_CODES.DEVICE_BUSY, 'Terminal is busy with another command');
+      }
+      return queued((d) => handlePing(d));
     case 'pax.cancel':
-      return handleCancel(resolveDevice(config, deviceId));
+      // Secondary port, so it must NOT wait behind the sale it is cancelling.
+      return handleCancel(device);
     default:
       throw new CommandError(ERROR_CODES.PROTOCOL_ERROR, `Unknown command: ${msg.command}`);
   }
+}
+
+/**
+ * A sale is charged at most once per external_id: a duplicate while it runs
+ * joins the running one; after an approval, the journaled result is returned.
+ * Declines and timeouts are not replayed from the journal — trying the same
+ * payment again after one of those must reach the terminal.
+ */
+function runSale(
+  config: AgentConfig,
+  deviceId: string,
+  msg: RequestMessage,
+  ctx: DispatchContext,
+): Promise<PaxResult> {
+  const payload = msg.payload as SalePayload;
+  const key = payload.external_id;
+  const done = key ? ctx.journal?.get(key) : undefined;
+  if (done && done.result.result_code === SUCCESS_CODE) {
+    logger.warn({ id: msg.id, externalId: key }, 'sale already approved, returning journaled result');
+    return Promise.resolve(done.result);
+  }
+  const running = key ? salesInFlight.get(key) : undefined;
+  if (running) {
+    logger.warn({ id: msg.id, externalId: key }, 'sale already in flight, joining it');
+    return running;
+  }
+
+  const receivedAt = Date.now();
+  const run = runExclusive(deviceId, async () => {
+    const device = resolveDevice(config, deviceId);
+    const result = await handleSale(device, payload);
+    // Journal before anything else can fail or the socket can drop.
+    if (key) ctx.journal?.record(key, msg.id, result);
+
+    if (payload.print_receipt && result.result_code === SUCCESS_CODE) {
+      const left = Math.min(PRINT_MAX_MS, SALE_BUDGET_MS - (Date.now() - receivedAt));
+      Object.assign(
+        result,
+        left < PRINT_MIN_MS
+          ? { receipt_printed: false, receipt_error: 'no time left to print before the API deadline' }
+          : await printReceipt(device, payload, result, left),
+      );
+      if (key) ctx.journal?.record(key, msg.id, result);
+    }
+    return result;
+  });
+  if (key) {
+    salesInFlight.set(key, run);
+    run.then(
+      () => salesInFlight.delete(key),
+      () => salesInFlight.delete(key),
+    );
+  }
+  return run;
 }
 
 /**
