@@ -13,7 +13,7 @@ import { getLogger } from './logger';
 import { initialize } from './commands/ping';
 import { discoverTerminal, FoundTerminal, subnetHosts } from './terminal-discovery';
 import { isBusy, runIfIdle } from './terminal-queue';
-import type { TerminalStatusMessage } from './protocol/messages';
+import type { TerminalStatus, TerminalStatusMessage } from './protocol/messages';
 
 const logger = getLogger();
 
@@ -24,7 +24,6 @@ const CHECK_TIMEOUT_MS = 5_000;
 const DISCOVER_AFTER_FAILURES = 2;
 const DISCOVER_EVERY_FAILURES = 10;
 
-type DeviceStatus = TerminalStatusMessage['devices'][number];
 
 export interface TerminalMonitorOptions {
   config: AgentConfig;
@@ -44,7 +43,7 @@ export interface TerminalMonitorHandle {
 
 export function startTerminalMonitor(opts: TerminalMonitorOptions): TerminalMonitorHandle {
   const { config } = opts;
-  const statuses = new Map<string, DeviceStatus>();
+  const statuses = new Map<string, TerminalStatus>();
   const failures = new Map<string, number>();
   let lastSentJson = '';
   let lastSentAt = 0;
@@ -70,7 +69,7 @@ export function startTerminalMonitor(opts: TerminalMonitorOptions): TerminalMoni
     const device = config.devices.find((d) => d.device_id === deviceId);
     if (!device) return;
     const previous = statuses.get(deviceId);
-    const status: DeviceStatus = {
+    const status: TerminalStatus = {
       device_id: deviceId,
       ip: device.ip,
       port: device.port,
