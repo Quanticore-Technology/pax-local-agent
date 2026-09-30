@@ -218,7 +218,7 @@ $('refresh').addEventListener('click', fetchStatus);
 $('repair').addEventListener('click', async () => {
   if (!confirm('Disconnect this agent and pair a new one?\\n\\nYou will see a new pairing code to enter in the cloud dashboard.')) return;
   try {
-    const r = await fetch('/api/forget-pairing', { method: 'POST' });
+    const r = await fetch('/api/forget-pairing', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     if (!r.ok) throw new Error('Failed');
     toast('Pairing forgotten — generating new code...', 'ok');
     setTimeout(() => { fetchConfig(); fetchStatus(); }, 1500);

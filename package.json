@@ -1,6 +1,6 @@
 {
   "name": "@gonails/pax-agent",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "On-prem relay agent: cloud backend → local PAX A920 over POSLink",
   "private": true,
   "main": "dist/index.js",
