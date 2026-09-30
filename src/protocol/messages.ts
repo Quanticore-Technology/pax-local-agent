@@ -59,6 +59,8 @@ export interface PingPayload {
 
 export interface CancelPayload {
   device_id: string;
+  /** Only abort if this sale is the one on the terminal; otherwise the agent answers result_code NOT_RUNNING. */
+  external_id?: string;
 }
 
 /** One terminal address on the salon LAN. */
@@ -207,6 +209,7 @@ export const ERROR_CODES = {
   AGENT_OFFLINE: 'AGENT_OFFLINE',
   AGENT_TIMEOUT: 'AGENT_TIMEOUT',
   DEVICE_UNREACHABLE: 'DEVICE_UNREACHABLE',
+  TERMINAL_NO_RESPONSE: 'TERMINAL_NO_RESPONSE',
   DEVICE_BUSY: 'DEVICE_BUSY',
   INVALID_DEVICE_ID: 'INVALID_DEVICE_ID',
   POSLINK_ERROR: 'POSLINK_ERROR',

@@ -9,6 +9,7 @@ import { join } from 'path';
 import { dispatch } from '../src/command-router';
 import { AgentConfig } from '../src/config';
 import { SaleJournal } from '../src/sale-journal';
+import { runIfIdle } from '../src/terminal-queue';
 import { toReferenceNumber } from '../src/poslink-credit-request';
 import { buildReceipt } from '../src/commands/print-receipt';
 import { COMMAND, PROTOCOL_VERSION } from '../src/poslink-protocol';
@@ -48,7 +49,7 @@ describe('terminal queue', () => {
     const responses = await Promise.all([
       dispatch(config, sale('a', 'q1')),
       dispatch(config, { type: 'request', id: 'v', command: 'pax.void', payload: { device_id: 'q1', orig_ref_num: '1' } }),
-      dispatch(config, sale('b', 'q1')),
+      dispatch(config, { type: 'request', id: 't', command: 'pax.tip_adjust', payload: { device_id: 'q1', orig_ref_num: '1', tip_cents: 100 } }),
     ]);
     expect(responses.every((r) => r.success)).toBe(true);
     expect(mock.maxConcurrent).toBe(1);
@@ -62,6 +63,18 @@ describe('terminal queue', () => {
     expect(ping.success).toBe(false);
     if (!ping.success) expect(ping.error.code).toBe(ERROR_CODES.DEVICE_BUSY);
     expect((await running).success).toBe(true);
+  });
+});
+
+describe('ping and the background check', () => {
+  it('waits for a background check instead of answering DEVICE_BUSY', async () => {
+    const mock = await startPoslinkMock();
+    const config = configFor(mock, 'bg1');
+    const check = runIfIdle('bg1', () => new Promise((r) => setTimeout(r, 300)));
+    expect(check).not.toBeNull();
+    const ping = await dispatch(config, { type: 'request', id: 'pbg', command: 'pax.ping', payload: { device_id: 'bg1' } });
+    await mock.close();
+    expect(ping.success).toBe(true);
   });
 });
 
@@ -237,12 +250,25 @@ describe('config.set_devices', () => {
     });
     const saved = JSON.parse(readFileSync(configPath, 'utf8'));
     expect(saved.token).toBe('pat_test');
-    expect(saved.devices[0]).toEqual({ device_id: 'default', ip: '127.0.0.1', port: mock.port, secondary_port: 10010, serial: 'SN1' });
+    // New address, maybe a new terminal: the old serial is dropped.
+    expect(saved.devices[0]).toEqual({ device_id: 'default', ip: '127.0.0.1', port: mock.port, secondary_port: 10010 });
 
     // The very next command goes to the new address.
     const ping = await dispatch(config, { type: 'request', id: 'pg', command: 'pax.ping', payload: {} });
     await mock.close();
     expect(ping.success).toBe(true);
+  });
+
+  it('keeps the serial when the address is unchanged', async () => {
+    const config: AgentConfig = {
+      wss_url: 'ws://x',
+      token: 'pat_x',
+      office_id: 'o',
+      agent_id: 'a',
+      devices: [{ device_id: 'a', ip: '192.168.1.2', port: 10009, serial: 'SN1' }],
+    };
+    await dispatch(config, setDevices([{ device_id: 'a', ip: '192.168.1.2', port: 10009 }]));
+    expect(config.devices[0].serial).toBe('SN1');
   });
 
   it.each([
@@ -262,5 +288,81 @@ describe('config.set_devices', () => {
     const res = await dispatch(config, setDevices(devices));
     expect(res.success).toBe(false);
     expect(config.devices[0].ip).toBe('192.168.1.2');
+  });
+});
+
+describe('no charge after the API gave up', () => {
+  let mock: PoslinkMockHandle;
+  afterEach(() => mock.close());
+
+  it('refuses a second, different sale while one is on the terminal', async () => {
+    mock = await startPoslinkMock({ delayMs: 100 });
+    const config = configFor(mock, 'h1');
+    const [a, b] = await Promise.all([dispatch(config, sale('A', 'h1')), dispatch(config, sale('B', 'h1'))]);
+    expect(a.success).toBe(true);
+    expect(b.success).toBe(false);
+    if (!b.success) expect(b.error.code).toBe(ERROR_CODES.DEVICE_BUSY);
+    expect(mock.received.filter((r) => r.command === COMMAND.DO_CREDIT)).toHaveLength(1);
+  });
+
+  it('drops a command that waited more than 5 s for the terminal, without sending it', async () => {
+    mock = await startPoslinkMock({ delayMs: 5_300 });
+    const config = configFor(mock, 'h2');
+    const [first, late] = await Promise.all([
+      dispatch(config, sale('slow', 'h2')),
+      dispatch(config, { type: 'request', id: 'late', command: 'pax.void', payload: { device_id: 'h2', orig_ref_num: '1' } }),
+    ]);
+    expect(first.success).toBe(true);
+    expect(late.success).toBe(false);
+    if (!late.success) expect(late.error.code).toBe(ERROR_CODES.DEVICE_BUSY);
+    expect(mock.received).toHaveLength(1);
+  }, 10_000);
+
+  it('cancel with external_id aborts only that sale', async () => {
+    mock = await startPoslinkMock({ delayMs: 100 });
+    const config = configFor(mock, 'h3');
+    config.devices[0].secondary_port = mock.port;
+    const running = dispatch(config, sale('mine', 'h3'));
+    const cancel = (externalId?: string, id = 'c') =>
+      dispatch(config, { type: 'request', id, command: 'pax.cancel', payload: { device_id: 'h3', external_id: externalId } });
+
+    const other = await cancel('ext-someone-else');
+    expect((other as { result: PaxResult }).result.result_code).toBe('NOT_RUNNING');
+    expect(mock.received.some((r) => r.command === COMMAND.ABORT)).toBe(false);
+
+    await cancel('ext-mine', 'c2');
+    expect(mock.received.some((r) => r.command === COMMAND.ABORT)).toBe(true);
+    await running;
+    // Old API (no external_id): aborts whatever is there, as before.
+    const count = mock.received.length;
+    await cancel(undefined, 'c3');
+    expect(mock.received.length).toBe(count + 1);
+  });
+});
+
+describe('unknown outcome vs unreachable', () => {
+  it('is TERMINAL_NO_RESPONSE when a sale reached the terminal and then timed out', async () => {
+    const { createServer } = await import('net');
+    // Accepts the connection and never answers.
+    const silent = createServer(() => undefined);
+    await new Promise<void>((r) => silent.listen(0, '127.0.0.1', r));
+    const port = (silent.address() as { port: number }).port;
+    const { pickErrorCode } = await import('../src/command-router');
+    const { sendCommand } = await import('../src/pax-client');
+    const err = await sendCommand({ ip: '127.0.0.1', port, timeoutMs: 200 }, 'T00').catch((e) => e);
+    silent.close();
+    expect(pickErrorCode(err, 'pax.sale')).toBe(ERROR_CODES.TERMINAL_NO_RESPONSE);
+    expect(pickErrorCode(err, 'pax.void')).toBe(ERROR_CODES.TERMINAL_NO_RESPONSE);
+    expect(pickErrorCode(err, 'pax.ping')).toBe(ERROR_CODES.DEVICE_UNREACHABLE);
+  });
+
+  it('is DEVICE_UNREACHABLE when the connection itself failed', async () => {
+    const { pickErrorCode } = await import('../src/command-router');
+    const { sendCommand } = await import('../src/pax-client');
+    const refused = await sendCommand({ ip: '127.0.0.1', port: 1, timeoutMs: 1_000 }, 'T00').catch((e) => e);
+    expect(pickErrorCode(refused, 'pax.sale')).toBe(ERROR_CODES.DEVICE_UNREACHABLE);
+    // Connect that never completes (non-routable address) times out before sending.
+    const noConnect = await sendCommand({ ip: '10.255.255.1', port: 10009, timeoutMs: 300 }, 'T00').catch((e) => e);
+    expect(pickErrorCode(noConnect, 'pax.sale')).toBe(ERROR_CODES.DEVICE_UNREACHABLE);
   });
 });

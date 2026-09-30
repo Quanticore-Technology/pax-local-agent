@@ -115,11 +115,19 @@ export async function sendCommand(
   return parsed;
 }
 
+/**
+ * A transport failure, marked with whether the packet had already gone out.
+ * Before the socket connected the terminal never saw the command; after, a
+ * sale may be charging the card right now, so "try again" would be wrong.
+ */
+export type TransportError = Error & { code?: string; requestSent?: boolean };
+
 /** Issue the GET and collect the raw response bytes. */
 function httpGet(opts: PaxClientOptions, query: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let settled = false;
+    let sent = false;
 
     const request = http.request(
       {
@@ -129,6 +137,9 @@ function httpGet(opts: PaxClientOptions, query: string): Promise<Buffer> {
         // The query string is the base64 packet, passed through untouched.
         path: `/?${query}`,
         timeout: opts.timeoutMs,
+        // A fresh socket per command: a reused keep-alive socket would hide
+        // whether this command's connect succeeded.
+        agent: false,
       },
       (response) => {
         response.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -139,10 +150,12 @@ function httpGet(opts: PaxClientOptions, query: string): Promise<Buffer> {
         });
       },
     );
+    request.on('socket', (socket) => socket.once('connect', () => (sent = true)));
 
-    const fail = (err: Error): void => {
+    const fail = (err: TransportError): void => {
       if (settled) return;
       settled = true;
+      err.requestSent = sent;
       request.destroy();
       reject(err);
     };
