@@ -1,6 +1,6 @@
 import { sendCommand } from '../pax-client';
 import { getLogger } from '../logger';
-import { BATCH_TRANS_TYPE, COMMAND, EDC_TYPE, SUCCESS_CODE, subField } from '../poslink-protocol';
+import { BATCH_TRANS_TYPE, COMMAND, EDC_TYPE, subField } from '../poslink-protocol';
 import type { DeviceEntry } from '../config';
 import type { BatchClosePayload, PaxResult } from '../protocol/messages';
 
@@ -51,7 +51,8 @@ export async function handleBatchClose(
   );
 
   return {
-    result_code: resultCode || SUCCESS_CODE,
+    // A reply without a response code is not a success.
+    result_code: resultCode || 'NO_RESPONSE_CODE',
     result_text: resultText,
     ref_num: '',
     auth_code: '',

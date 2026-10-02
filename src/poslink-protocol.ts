@@ -44,6 +44,8 @@ export const COMMAND = {
   DO_SIGNATURE: 'A20',
   DO_CREDIT: 'T00',
   BATCH_CLOSE: 'B00',
+  /** Print on the terminal's printer; layout from PAX's sample (management.js). */
+  PRINT: 'A60',
   /**
    * UNVERIFIED — abort an in-progress transaction. Not in PAX's sample, and not
    * in the setup guide we hold. See `commands/cancel.ts`: the handler logs the

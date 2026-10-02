@@ -17,11 +17,6 @@ directly. See [`src/poslink-protocol.ts`](src/poslink-protocol.ts).
 **The terminal must be set to `Comm Type = Ethernet` and `Protocol Type = HTTP GET`**
 (ECR Comm Settings — tap the four screen corners, password `1` or MMDDYYYY).
 
-`batch_close` and `cancel` are not implemented: their command codes are absent
-from PAX's published sample and we are waiting on the Low Level Specification
-document rather than guessing. Both fail with a clear message; settle and cancel
-from the terminal's own menu meanwhile.
-
 ## Install (macOS, prod) — pairing-code flow
 
 1. Salon downloads `GoNailsPaxAgent-<version>.pkg` from the cloud
@@ -83,9 +78,42 @@ curl http://127.0.0.1:9876/health
 | `token` | yes | Issued by dashboard, format `pat_<base64url>` |
 | `office_id` | yes | Salon UUID |
 | `agent_id` | yes | Server-generated UUID returned at token issuance |
-| `devices` | yes | Array of `{ device_id, ip, port }` |
+| `devices` | yes | Array of `{ device_id, ip, port }`. The agent adds `serial` itself and may rewrite `ip` (see below) |
 | `health_port` | no | Default `9876` |
 | `log_dir` | no | Default `%PROGRAMDATA%\GoNails\PaxAgent\logs` |
+
+## Reliability
+
+- **One command at a time per terminal.** Commands for the same terminal queue,
+  but none waits more than 5 s: after that it is dropped with `DEVICE_BUSY`
+  without touching the terminal (the API may already have given up on it). A
+  sale while a different sale is on the terminal gets `DEVICE_BUSY` at once.
+  `pax.cancel` skips the queue (secondary port); given an `external_id` it only
+  aborts that sale (otherwise result_code `NOT_RUNNING`). `pax.ping` answers `DEVICE_BUSY`
+  while a real command runs.
+- **Unknown outcome.** A timeout or reset after a sale/void/refund/tip adjust/
+  batch close reached the terminal is `TERMINAL_NO_RESPONSE`, not
+  `DEVICE_UNREACHABLE`: the card may have been charged, so check before retrying.
+- **A sale is charged once per `external_id`.** A duplicate while it runs joins
+  it; after an approval the stored result is returned.
+- **Sale journal.** Every finished sale is written to `sale-journal.json` next to
+  `config.json` (mode 0600) before the response is sent. Results whose response
+  did not go out on the socket the request came in on are re-sent as
+  `sale_result_replay` after every reconnect until the cloud answers
+  `replay_ack` — starting 2 s after connect, 5 at a time, 1 s apart (the gateway
+  drops a socket that floods it before the token check). Entries are dropped
+  after 7 days.
+- **Terminal status.** Every 30 s each terminal gets an A00 Initialize (skipped
+  while it is busy); `terminal_status` goes to the cloud after `hello`, on any
+  change, and at least every 60 s.
+- **Auto-discovery.** After two failed checks the agent scans its own subnet
+  (/24, at most /22) for port 10009, confirms with A00, and switches only to the
+  terminal with the remembered serial — never when no serial is known. A
+  different terminal answering at the configured IP counts as unreachable. The
+  new IP is saved to config and reported with `discovered: true`.
+- **Receipts.** With `print_receipt`, an approved sale prints a customer receipt
+  on the terminal (A60). A print failure is reported as `receipt_error` and never
+  fails the sale.
 
 ## Logs
 

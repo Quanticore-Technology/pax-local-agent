@@ -1,4 +1,14 @@
-import { readFileSync, writeFileSync, renameSync, unlinkSync, existsSync, mkdirSync } from 'fs';
+import {
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  writeSync,
+  fsyncSync,
+  closeSync,
+} from 'fs';
 import { join, dirname } from 'path';
 import { homedir, platform } from 'os';
 
@@ -15,6 +25,8 @@ export interface DeviceEntry {
    * second listener for exactly that out-of-band case.
    */
   secondary_port?: number;
+  /** Last serial number the terminal reported; lets auto-discovery pick the same terminal after a DHCP change. */
+  serial?: string;
 }
 
 /** ECR Comm Settings ships with Secondary Port = 10010. */
@@ -96,9 +108,23 @@ export function tryLoadConfig(path: string = defaultConfigPath()):
 /** Atomic write: write to .tmp then rename. Preserves 0600 permissions. */
 export function writeConfig(config: AgentConfig, path: string = defaultConfigPath()): void {
   validateConfig(config, path);
+  writeFileDurable(path, JSON.stringify(config, null, 2) + '\n');
+}
+
+/**
+ * Owner-only (0600), atomic and durable: write a tmp file, fsync, rename. A
+ * power cut leaves either the old file or the new one, never a torn one.
+ */
+export function writeFileDurable(path: string, data: string): void {
   ensureDir(dirname(path));
   const tmp = `${path}.tmp`;
-  writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
+  const fd = openSync(tmp, 'w', 0o600);
+  try {
+    writeSync(fd, data);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, path);
 }
 

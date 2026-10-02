@@ -39,6 +39,9 @@ async function main(): Promise<void> {
   // ws-client and starts a fresh one.
   let wsClient: WsClientHandle | null = null;
   let pairing: PairingHandle | null = null;
+  let pairingCodeTimer: NodeJS.Timeout | null = null;
+  // Where config is read from and written back to (argv override or default).
+  const activeConfigPath = loaded.path;
 
   const startPairing = (previousDevices?: DeviceEntry[]): void => {
     if (pairing) return; // already pairing
@@ -48,9 +51,13 @@ async function main(): Promise<void> {
       previous_devices: previousDevices,
       onClaimed: (cfg) => onConfigReady(cfg),
     });
-    setInterval(() => {
+    // One timer per pairing session, cleared when pairing ends — it used to
+    // leak one interval per re-pair.
+    if (pairingCodeTimer) clearInterval(pairingCodeTimer);
+    pairingCodeTimer = setInterval(() => {
       state.pairing_code = pairing?.getCode() ?? null;
-    }, 500).unref?.();
+    }, 500);
+    pairingCodeTimer.unref?.();
   };
 
   // Triggered when the gateway repeatedly rejects our token (consecutive 4003
@@ -63,7 +70,7 @@ async function main(): Promise<void> {
     // can restore them — otherwise every re-pair would reset PAX IP to the
     // bogus placeholder and break Test Connection until staff re-enter it.
     const previousDevices = state.config?.devices;
-    try { deleteConfig(); } catch (e) {
+    try { deleteConfig(activeConfigPath); } catch (e) {
       logger.warn({ err: (e as Error).message }, 'deleteConfig failed (non-fatal)');
     }
     if (wsClient) {
@@ -78,7 +85,13 @@ async function main(): Promise<void> {
     if (wsClient) {
       try { wsClient.stop(); } catch { /* ignore */ }
     }
-    wsClient = startWsClient(cfg, VERSION, { onAuthFail: onTokenRevoked });
+    wsClient = startWsClient(cfg, VERSION, {
+      onAuthFail: onTokenRevoked,
+      configPath: activeConfigPath,
+      onCommand: () => {
+        state.last_command_at = Date.now();
+      },
+    });
   };
 
   const onConfigReady = (cfg: AgentConfig): void => {
@@ -87,7 +100,7 @@ async function main(): Promise<void> {
     // and immediately re-enter pairing mode rather than thrashing connect
     // attempts with an invalid URL.
     try {
-      writeConfig(cfg);
+      writeConfig(cfg, activeConfigPath);
     } catch (e) {
       logger.error(
         { err: (e as Error).message },
@@ -100,6 +113,8 @@ async function main(): Promise<void> {
     state.pairing_code = null;
     pairing?.stop();
     pairing = null;
+    if (pairingCodeTimer) clearInterval(pairingCodeTimer);
+    pairingCodeTimer = null;
     startWs(cfg);
   };
 

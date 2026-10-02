@@ -1,5 +1,5 @@
 import { dispatch } from '../src/command-router';
-import { RequestMessage, ERROR_CODES } from '../src/protocol/messages';
+import { RequestMessage, ERROR_CODES, PaxResult } from '../src/protocol/messages';
 import { AgentConfig } from '../src/config';
 import { startPoslinkMock } from './poslink-mock-server';
 
@@ -52,7 +52,7 @@ describe('CommandRouter.dispatch', () => {
       expect(response.success).toBe(true);
       if (response.success) {
         expect(response.result).toBeDefined();
-        expect(response.result.result_code).toBe('000000');
+        expect((response.result as PaxResult).result_code).toBe('000000');
       }
     });
 

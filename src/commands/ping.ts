@@ -1,5 +1,5 @@
 import { sendCommand } from '../pax-client';
-import { COMMAND, SUCCESS_CODE, subField } from '../poslink-protocol';
+import { COMMAND, subField } from '../poslink-protocol';
 import type { DeviceEntry } from '../config';
 import type { PaxResult } from '../protocol/messages';
 
@@ -20,17 +20,30 @@ const INIT_RESPONSE_MESSAGE = 4;
 const INIT_SERIAL_NUMBER = 5;
 const INIT_MODEL_NAME = 6;
 
-export async function handlePing(device: DeviceEntry): Promise<PaxResult> {
-  const parsed = await sendCommand(
-    { ip: device.ip, port: device.port, timeoutMs: TIMEOUT_MS },
-    COMMAND.INITIALIZE,
-  );
+export interface TerminalIdentity {
+  resultCode: string;
+  resultText: string;
+  serial: string;
+  model: string;
+}
 
-  const resultCode = subField(parsed, INIT_RESPONSE_CODE, 0);
-  const resultText = subField(parsed, INIT_RESPONSE_MESSAGE, 0);
+/** Send A00 to an address and read who answered. Rejects when nothing answers. */
+export async function initialize(ip: string, port: number, timeoutMs: number): Promise<TerminalIdentity> {
+  const parsed = await sendCommand({ ip, port, timeoutMs }, COMMAND.INITIALIZE);
+  return {
+    resultCode: subField(parsed, INIT_RESPONSE_CODE, 0),
+    resultText: subField(parsed, INIT_RESPONSE_MESSAGE, 0),
+    serial: subField(parsed, INIT_SERIAL_NUMBER, 0),
+    model: subField(parsed, INIT_MODEL_NAME, 0),
+  };
+}
+
+export async function handlePing(device: DeviceEntry): Promise<PaxResult> {
+  const { resultCode, resultText, serial, model } = await initialize(device.ip, device.port, TIMEOUT_MS);
 
   return {
-    result_code: resultCode || SUCCESS_CODE,
+    // A reply without a response code is not a success.
+    result_code: resultCode || 'NO_RESPONSE_CODE',
     result_text: resultText,
     ref_num: '',
     auth_code: '',
@@ -42,8 +55,8 @@ export async function handlePing(device: DeviceEntry): Promise<PaxResult> {
     raw_response: {
       resultCode,
       resultText,
-      serialNumber: subField(parsed, INIT_SERIAL_NUMBER, 0),
-      modelName: subField(parsed, INIT_MODEL_NAME, 0),
+      serialNumber: serial,
+      modelName: model,
     },
   };
 }
