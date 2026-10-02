@@ -73,8 +73,10 @@ jobs:
         run: |
           set -euo pipefail
           case "$ENDPOINT" in http://*|https://*) ;; *) ENDPOINT="https://$ENDPOINT" ;; esac
-          existing=$(aws s3 ls "s3://$BUCKET/pax-agent/v$VERSION/" \
-            --endpoint-url "$ENDPOINT" --region "$REGION" --recursive | wc -l)
+          # `aws s3 ls` exits 1 when the prefix has no objects — the normal case
+          # for a new version — which pipefail turned into a failed release.
+          existing=$({ aws s3 ls "s3://$BUCKET/pax-agent/v$VERSION/" \
+            --endpoint-url "$ENDPOINT" --region "$REGION" --recursive || true; } | wc -l)
           if [ "$FORCE" = "true" ] || [ "$existing" -eq 0 ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
             echo "::notice::v$VERSION will be published ($existing existing objects, force=$FORCE)"
