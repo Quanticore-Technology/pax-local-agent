@@ -61,17 +61,28 @@ export function buildReceipt(payload: SalePayload, result: PaxResult, now: Date)
     if (text) lines.push(`\\C\\1${text}`);
   }
   lines.push(`\\C\\1${stamp}`, '', '\\C\\3SALE');
-  if (card) lines.push(`\\L\\1Card\\R\\1${clean(card)}`);
-  if (result.auth_code) lines.push(`\\L\\1Auth code\\R\\1${clean(result.auth_code)}`);
+  if (card) lines.push(row('Card', clean(card)));
+  if (result.auth_code) lines.push(row('Auth code', clean(result.auth_code)));
   lines.push(
-    `\\L\\1Amount\\R\\1${money(amount)}`,
-    `\\L\\1Tip\\R\\1${money(tip)}`,
-    `\\L\\2Total\\R\\2${money(amount + tip)}`,
+    row('Amount', money(amount)),
+    row('Tip', money(tip)),
+    row('Total', money(amount + tip)),
     '',
     '\\C\\2APPROVED',
     '\\C\\1Customer copy',
   );
-  return lines.join('\\n') + '\\n';
+  // Real line feeds. PAX's JavaScript sample writes the two characters `\n`,
+  // but on a real A920 (BroadPOS TSYS Sierra) only the first line then printed,
+  // plus right-aligned text; LF prints every line. CRLF adds blank lines.
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * Label left, value right. No size codes: on a real A920 (BroadPOS TSYS Sierra)
+ * `\L\1Label\R\1Value` printed only the value; `\LLabel\RValue` prints both.
+ */
+function row(label: string, value: string): string {
+  return `\\L${label}\\R${value}`;
 }
 
 function money(cents: number): string {

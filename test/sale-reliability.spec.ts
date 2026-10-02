@@ -215,15 +215,15 @@ describe('receipts, card brand and EMV', () => {
         '\\C\\12026-09-30 14:05',
         '',
         '\\C\\3SALE',
-        '\\L\\1Card\\R\\1Visa ****4242',
-        '\\L\\1Auth code\\R\\1AB12',
-        '\\L\\1Amount\\R\\1$40.00',
-        '\\L\\1Tip\\R\\1$5.00',
-        '\\L\\2Total\\R\\2$45.00',
+        '\\LCard\\RVisa ****4242',
+        '\\LAuth code\\RAB12',
+        '\\LAmount\\R$40.00',
+        '\\LTip\\R$5.00',
+        '\\LTotal\\R$45.00',
         '',
         '\\C\\2APPROVED',
         '\\C\\1Customer copy',
-      ].join('\\n') + '\\n',
+      ].join('\n') + '\n',
     );
   });
 });
