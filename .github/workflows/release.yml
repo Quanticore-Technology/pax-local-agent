@@ -141,7 +141,10 @@ jobs:
         run: bash installer/windows/build.sh
 
       - name: Smoke test packaged Windows agent
-        run: node installer/smoke-agent.js installer/windows/build/staging/pax-agent.exe
+        run: |
+          node installer/smoke-agent.js installer/windows/build/staging/pax-agent.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash installer/windows/dist/*.exe -Algorithm SHA256 | Format-List Path,Hash
 
       - uses: actions/upload-artifact@v4
         with:
@@ -187,6 +190,7 @@ jobs:
           if [ "$(uname -m)" = "arm64" ]; then
             node installer/smoke-agent.js /usr/bin/arch -x86_64 "$prefix/libexec/pax-agent/pax-agent-x64"
           fi
+          shasum -a 256 "installer/macos/dist/GoNailsPaxAgent-$VERSION-$ENV_LABEL.pkg"
 
       - uses: actions/upload-artifact@v4
         with:
