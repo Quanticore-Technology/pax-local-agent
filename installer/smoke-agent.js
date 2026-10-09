@@ -33,15 +33,17 @@ const assert = require('node:assert/strict');
   child.stdout.on('data', chunk => { output = (output + chunk).slice(-4000); });
   child.stderr.on('data', chunk => { output = (output + chunk).slice(-4000); });
   const exited = new Promise(resolve => child.once('close', resolve));
+  const startedAt = Date.now();
   try {
-    for (let attempt = 0; attempt < 40; attempt++) {
+    // Cold Rosetta translation can precede the agent's first log line.
+    while (Date.now() - startedAt < 60_000) {
       if (spawnError) throw spawnError;
       if (child.exitCode !== null || child.signalCode !== null) throw new Error(`Agent exited: ${output}`);
       try {
         const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(500) });
         const health = await response.json();
         assert.equal(health.version, require('../package.json').version);
-        console.log(`Packaged agent ${health.version} started successfully`);
+        console.log(`Packaged agent ${health.version} started successfully after ${Date.now() - startedAt}ms`);
         return;
       } catch (error) {
         if (error.code === 'ERR_ASSERTION') throw error;
