@@ -33,9 +33,9 @@ on:
 permissions:
   contents: read
 
-# One release at a time — two concurrent runs would race on the same CDN keys.
+# Serialize publication; build-only validation never writes CDN keys.
 concurrency:
-  group: agent-release
+  group: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish && format('agent-build-{0}', github.run_id) || 'agent-release' }}
   cancel-in-progress: false
 
 jobs:
