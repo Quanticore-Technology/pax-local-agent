@@ -88,6 +88,15 @@ describe('terminal monitor', () => {
 });
 
 describe('terminal monitor safety', () => {
+  it('reports connection refusal separately from a connected response timeout', async () => {
+    const sent: TerminalStatusMessage[] = [];
+    const config = baseConfig([{ device_id: 'diagnostic', ip: '127.0.0.1', port: await deadPort() }]);
+    const monitor = startTerminalMonitor({ config, send: m => sent.push(m) });
+    await monitor.checkNow(true);
+    monitor.stop();
+    expect(sent[0].devices[0].diagnostics).toMatchObject({ transport_code: 'ECONNREFUSED', request_sent: false, elapsed_ms: expect.any(Number) });
+  });
+
   it('never auto-switches when no serial is known', async () => {
     const config = baseConfig([{ device_id: 'm4', ip: '127.0.0.1', port: await deadPort() }]);
     const discover = jest.fn(async () => ({ ip: '127.0.0.2', serial: 'X', model: 'A920' }));

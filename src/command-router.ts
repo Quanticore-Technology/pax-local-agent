@@ -1,7 +1,9 @@
+import { BatchJournal } from './batch-journal';
 import { getLogger } from './logger';
 import type { AgentConfig, DeviceEntry } from './config';
 import { CommandError } from './command-error';
 import {
+  CommandDiagnostics,
   ERROR_CODES,
   PaxResult,
   RequestMessage,
@@ -50,6 +52,7 @@ export interface DispatchContext {
   configPath?: string;
   /** Sale results journal; omitted in tests that don't care about persistence. */
   journal?: SaleJournal;
+  batchJournal?: BatchJournal;
 }
 
 // The API answers a sale at 180s. Whatever the sale leaves of that budget is
@@ -84,19 +87,72 @@ function saleOnDevice(deviceId: string): string | undefined {
  * an unhandled rejection (which would silently leave the cloud caller hanging
  * until its 180s timeout).
  */
+const batchesInFlight = new Map<string, { deviceId: string | undefined; run: Promise<ResponseMessage> }>();
+
+export function isBatchInFlight(config: AgentConfig, closeoutId: string): boolean {
+  return batchesInFlight.has(`${config.office_id}:${config.agent_id}:${closeoutId}`);
+}
+
 export async function dispatch(
   config: AgentConfig,
   msg: RequestMessage,
   ctx: DispatchContext = {},
 ): Promise<ResponseMessage> {
+  if (msg.command === 'pax.batch_close' && (!msg.payload || typeof msg.payload !== 'object' || Array.isArray(msg.payload) ||
+      typeof (msg.payload as { device_id?: unknown }).device_id !== 'string' || !(msg.payload as { device_id?: string }).device_id)) {
+    return { type: 'response', id: msg.id, success: false, error: { code: ERROR_CODES.PROTOCOL_ERROR, message: 'Invalid batch payload' } };
+  }
+  const payload = msg.payload as { closeout_id?: string; device_id?: string };
+  if (msg.command !== 'pax.batch_close' || payload.closeout_id === undefined) return execute(config, msg, ctx);
+  if (typeof payload.closeout_id !== 'string' || !payload.closeout_id || payload.closeout_id.length > 128 || typeof payload.device_id !== 'string') {
+    return { type: 'response', id: msg.id, success: false, error: { code: ERROR_CODES.PROTOCOL_ERROR, message: 'Invalid batch identity' } };
+  }
+  const id = payload.closeout_id;
+  const key = `${config.office_id}:${config.agent_id}:${id}`;
+  const running = batchesInFlight.get(key);
+  if (running) {
+    if (running.deviceId !== payload.device_id) return { type: 'response', id: msg.id, success: false, error: { code: ERROR_CODES.PROTOCOL_ERROR, message: 'Closeout belongs to another terminal' } };
+    return { ...await running.run, id: msg.id };
+  }
+  const saved = ctx.batchJournal?.get(id);
+  if (saved) {
+    if (saved.device_id !== payload.device_id) return { type: 'response', id: msg.id, success: false,
+      error: { code: ERROR_CODES.PROTOCOL_ERROR, message: 'Closeout belongs to another terminal' } };
+    return { ...saved.response, id: msg.id };
+  }
+  const run = (async (): Promise<ResponseMessage> => {
+    try {
+      if (!ctx.batchJournal) throw new Error('Batch journal unavailable');
+      ctx.batchJournal.begin(id, msg.id, payload.device_id!);
+    } catch {
+      return { type: 'response', id: msg.id, success: false,
+        error: { code: ERROR_CODES.POSLINK_ERROR, message: 'Cannot persist batch intent; command was not sent' },
+        diagnostics: { elapsed_ms: 0, request_sent: false } };
+    }
+    const response = await execute(config, msg, ctx);
+    try { ctx.batchJournal.complete(id, response); }
+    catch (err) { logger.error({ err: (err as Error).message }, 'batch result persistence failed'); }
+    return response;
+  })();
+  batchesInFlight.set(key, { deviceId: payload.device_id, run });
+  try { return await run; } finally { batchesInFlight.delete(key); }
+}
+
+async function execute(
+  config: AgentConfig,
+  msg: RequestMessage,
+  ctx: DispatchContext = {},
+): Promise<ResponseMessage> {
   const startedAt = Date.now();
+  const diagnostics: Partial<CommandDiagnostics> = {};
   try {
-    const result = await runCommand(config, msg, ctx);
+    const result = await runCommand(config, msg, ctx, diagnostics);
     logger.info(
       { id: msg.id, command: msg.command, ms: Date.now() - startedAt, code: (result as PaxResult).result_code },
       'command success',
     );
-    return { type: 'response', id: msg.id, success: true, result };
+    return { type: 'response', id: msg.id, success: true, result,
+      ...(msg.command === 'pax.batch_close' ? { diagnostics: { elapsed_ms: Date.now() - startedAt, ...diagnostics } } : {}) };
   } catch (err) {
     const code = err instanceof CommandError ? err.code : pickErrorCode(err, msg.command);
     const message = (err as Error).message || 'agent command failed';
@@ -106,6 +162,13 @@ export async function dispatch(
       id: msg.id,
       success: false,
       error: { code, message },
+      ...(msg.command === 'pax.batch_close' ? { diagnostics: {
+        elapsed_ms: Date.now() - startedAt,
+        ...diagnostics,
+        ...(err as TransportError).diagnostics,
+        ...((err as TransportError).code !== undefined ? { transport_code: (err as TransportError).code } : {}),
+        ...((err as TransportError).requestSent !== undefined ? { request_sent: (err as TransportError).requestSent } : {}),
+      } } : {}),
     };
   }
 }
@@ -114,6 +177,7 @@ async function runCommand(
   config: AgentConfig,
   msg: RequestMessage,
   ctx: DispatchContext,
+  diagnostics: Partial<CommandDiagnostics>,
 ): Promise<PaxResult | SetDevicesResult> {
   if (msg.command === 'config.set_devices') {
     return handleSetDevices(config, ctx.configPath, msg.payload as SetDevicesPayload);
@@ -136,7 +200,7 @@ async function runCommand(
     case 'pax.tip_adjust':
       return queued((d) => handleTipAdjust(d, msg.payload as any, msg.id));
     case 'pax.batch_close':
-      return queued((d) => handleBatchClose(d, msg.payload as any));
+      return queued((d) => handleBatchClose(d, msg.payload as any, diagnostics));
     case 'pax.ping':
       // The API gives ping 5s; waiting behind a 3-minute sale would only time
       // out. A running command already proves the terminal is there. (Only a

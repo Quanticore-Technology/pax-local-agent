@@ -1,7 +1,8 @@
 import WebSocket from 'ws';
 import type { AgentConfig } from './config';
-import { dispatch, isSaleInFlight } from './command-router';
+import { dispatch, isSaleInFlight, isBatchInFlight } from './command-router';
 import { getLogger, LogRateLimiter } from './logger';
+import { BatchJournal } from './batch-journal';
 import { JournalEntry, SaleJournal } from './sale-journal';
 import { startTerminalMonitor } from './terminal-monitor';
 import {
@@ -44,7 +45,7 @@ export interface WsClientOptions {
 }
 
 /** The client currently in charge; a replaced one hands late sale results to it. */
-let liveClient: { replay(externalId: string): void } | null = null;
+let liveClient: { replay(externalId: string): void; replayBatch(closeoutId: string): void } | null = null;
 
 /**
  * Long-lived WSS client with exponential backoff + jittered reconnect.
@@ -64,6 +65,9 @@ export function startWsClient(
   /** Bumped on every open, to tell whether a request outlived its socket. */
   let connection = 0;
   const logLimiter = new LogRateLimiter(60);
+  let batchJournal: BatchJournal | undefined;
+  try { if (opts.configPath) batchJournal = BatchJournal.nextTo(opts.configPath, config); }
+  catch (err) { logger.error({ err: (err as Error).message }, 'batch journal unavailable; batch commands will be refused'); }
   const journal = opts.configPath ? SaleJournal.nextTo(opts.configPath) : undefined;
   const monitor = startTerminalMonitor({
     config,
@@ -97,6 +101,11 @@ export function startWsClient(
    */
   const scheduleReplay = (conn: number): void => {
     const timer = setTimeout(async () => {
+      for (const entry of batchJournal?.pending() ?? []) {
+        if (stopped || conn !== connection || ws?.readyState !== WebSocket.OPEN) return;
+        replayBatch(entry.closeout_id);
+        await new Promise((r) => setTimeout(r, REPLAY_GAP_MS).unref?.());
+      }
       const pending = (journal?.unacked() ?? []).filter((e) => !isSaleInFlight(e.external_id));
       for (let i = 0; i < pending.length; i += REPLAY_BATCH) {
         if (stopped || conn !== connection || ws?.readyState !== WebSocket.OPEN) return;
@@ -107,7 +116,20 @@ export function startWsClient(
     timer.unref?.();
   };
 
-  const self = { replay: replayOne };
+  const replayBatch = (closeoutId: string): void => {
+    if (isBatchInFlight(config, closeoutId)) return;
+    const entry = batchJournal?.get(closeoutId);
+    if (entry && !entry.acked) {
+      const { acked, ...message } = entry;
+      sendIfOpen(JSON.stringify(message));
+    }
+  };
+  // A socket write is not a durable receipt. Retry results until the API explicitly acks.
+  const batchReplayTimer = setInterval(() => {
+    if (!stopped) for (const entry of batchJournal?.pending() ?? []) replayBatch(entry.closeout_id);
+  }, 30_000);
+  batchReplayTimer.unref?.();
+  const self = { replay: replayOne, replayBatch };
   liveClient = self;
 
   const connect = (): void => {
@@ -177,7 +199,14 @@ export function startWsClient(
       logger.warn({ raw: raw.slice(0, 200) }, 'received non-JSON frame');
       return;
     }
+    if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'heartbeat') return;
+    if (msg.type === 'batch_replay_ack') {
+      if (typeof msg.closeout_id !== 'string' || typeof msg.request_id !== 'string') return;
+      try { batchJournal?.ack(msg.closeout_id, msg.request_id); }
+      catch (err) { logger.error({ err: (err as Error).message }, 'batch ack persistence failed'); }
+      return;
+    }
     if (msg.type === 'replay_ack') {
       journal?.ack(msg.external_id);
       return;
@@ -186,9 +215,13 @@ export function startWsClient(
       logger.warn({ type: (msg as { type?: string }).type }, 'unknown server message type');
       return;
     }
+    if (!msg.payload || typeof msg.payload !== 'object' || typeof msg.id !== 'string') {
+      sendIfOpen(JSON.stringify({ type: 'response', id: msg.id, success: false, error: { code: 'PROTOCOL_ERROR', message: 'Invalid request' } }));
+      return;
+    }
     opts.onCommand?.();
     const receivedOn = connection;
-    const response: ResponseMessage = await dispatch(config, msg, { configPath: opts.configPath, journal });
+    const response: ResponseMessage = await dispatch(config, msg, { configPath: opts.configPath, journal, batchJournal });
     const externalId = (msg.payload as { external_id?: string }).external_id;
     const isSale = msg.command === 'pax.sale' && !!externalId;
     sendIfOpen(JSON.stringify(response), () => {
@@ -202,6 +235,13 @@ export function startWsClient(
     if (isSale) {
       if (liveClient !== self) liveClient?.replay(externalId!);
       else if (receivedOn !== connection) replayOne(externalId!);
+    }
+    if (msg.command === 'pax.batch_close') {
+      const id = (msg.payload as { closeout_id?: string }).closeout_id;
+      if (id) {
+        if (liveClient !== self) liveClient?.replayBatch(id);
+        else replayBatch(id);
+      }
     }
     if (msg.command === 'config.set_devices' && response.success) void monitor.checkNow(true);
     // Mirror non-success responses to the cloud log stream for ops visibility.
@@ -264,6 +304,7 @@ export function startWsClient(
       stopped = true;
       stopHeartbeat();
       monitor.stop();
+      clearInterval(batchReplayTimer);
       if (liveClient === self) liveClient = null;
       try {
         ws?.close(1000, 'agent shutdown');

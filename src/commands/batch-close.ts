@@ -2,12 +2,12 @@ import { sendCommand } from '../pax-client';
 import { getLogger } from '../logger';
 import { BATCH_TRANS_TYPE, COMMAND, EDC_TYPE, subField } from '../poslink-protocol';
 import type { DeviceEntry } from '../config';
-import type { BatchClosePayload, PaxResult } from '../protocol/messages';
+import type { BatchClosePayload, CommandDiagnostics, PaxResult } from '../protocol/messages';
 
 const logger = getLogger();
 
 // Settlement talks to the processor, not just the terminal, so it is far
-// slower than a sale. Backend allows 120s (TIMEOUT_BATCH_MS); stay under it.
+// slower than a sale. Backend allows 125s (TIMEOUT_BATCH_MS); stay under it.
 const TIMEOUT_MS = 118_000;
 
 /**
@@ -33,9 +33,10 @@ const RSP_MESSAGE = 4;
 export async function handleBatchClose(
   device: DeviceEntry,
   _payload: BatchClosePayload,
+  diagnostics?: Partial<CommandDiagnostics>,
 ): Promise<PaxResult> {
   const parsed = await sendCommand(
-    { ip: device.ip, port: device.port, timeoutMs: TIMEOUT_MS },
+    { ip: device.ip, port: device.port, timeoutMs: TIMEOUT_MS, diagnostics },
     COMMAND.BATCH_CLOSE,
     [BATCH_TRANS_TYPE.CLOSE, EDC_TYPE.ALL],
   );
