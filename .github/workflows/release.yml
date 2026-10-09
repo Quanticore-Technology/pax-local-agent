@@ -140,6 +140,9 @@ jobs:
           BOOTSTRAP_URL: ${{ matrix.env.bootstrap }}
         run: bash installer/windows/build.sh
 
+      - name: Smoke test packaged Windows agent
+        run: node installer/smoke-agent.js installer/windows/build/staging/pax-agent.exe
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.env.label }}
@@ -169,17 +172,21 @@ jobs:
           BOOTSTRAP_URL: ${{ matrix.env.bootstrap }}
         run: bash installer/macos/build.sh
 
-      # The .pkg is useless on half the salon estate if the fuse silently
-      # produced a single slice, and that failure is invisible at install time.
-      - name: Assert the binary is universal
+      - name: Verify extracted macOS package starts
+        env:
+          ENV_LABEL: ${{ matrix.env.label }}
+          VERSION: ${{ needs.meta.outputs.version }}
         run: |
           set -euo pipefail
-          archs=$(lipo -archs installer/macos/build/root/usr/local/bin/pax-agent)
-          echo "archs: $archs"
-          case "$archs" in
-            *x86_64*arm64*|*arm64*x86_64*) ;;
-            *) echo "::error::expected a universal binary, got '$archs'"; exit 1 ;;
-          esac
+          expanded="$RUNNER_TEMP/pax-package"
+          pkgutil --expand-full "installer/macos/dist/GoNailsPaxAgent-$VERSION-$ENV_LABEL.pkg" "$expanded"
+          prefix="$expanded/component.pkg/Payload/usr/local"
+          test "$(lipo -archs "$prefix/libexec/pax-agent/pax-agent-arm64")" = "arm64"
+          test "$(lipo -archs "$prefix/libexec/pax-agent/pax-agent-x64")" = "x86_64"
+          node installer/smoke-agent.js "$prefix/bin/pax-agent"
+          if [ "$(uname -m)" = "arm64" ]; then
+            node installer/smoke-agent.js /usr/bin/arch -x86_64 "$prefix/libexec/pax-agent/pax-agent-x64"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:

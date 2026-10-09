@@ -23,6 +23,7 @@ rm -f "$PLIST"
 
 echo "Removing binary + .app..."
 rm -f "$BIN"
+rm -rf "/usr/local/libexec/pax-agent"
 rm -rf "/Applications/GoNails PAX Agent.app"
 
 read -p "Remove config (token + device settings) at $CONFIG_DIR? [y/N] " ans
