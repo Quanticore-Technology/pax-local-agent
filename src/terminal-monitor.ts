@@ -10,6 +10,7 @@
 import { writeConfig } from './config';
 import type { AgentConfig, DeviceEntry } from './config';
 import { getLogger } from './logger';
+import type { TransportError } from './pax-client';
 import { initialize } from './commands/ping';
 import { discoverTerminal, FoundTerminal, subnetHosts } from './terminal-discovery';
 import { anyBusy, runIfIdle } from './terminal-queue';
@@ -86,6 +87,7 @@ export function startTerminalMonitor(opts: TerminalMonitorOptions): TerminalMoni
     statuses.set(deviceId, status);
 
     let ok = false;
+    const startedAt = Date.now();
     try {
       const id = await initialize(device.ip, device.port, CHECK_TIMEOUT_MS);
       if (device.serial && id.serial && id.serial !== device.serial) {
@@ -100,8 +102,14 @@ export function startTerminalMonitor(opts: TerminalMonitorOptions): TerminalMoni
           save();
         }
       }
-    } catch {
-      // unreachable
+    } catch (error) {
+      const err = error as TransportError;
+      status.diagnostics = {
+        elapsed_ms: Date.now() - startedAt,
+        ...err.diagnostics,
+        transport_code: err.code,
+        request_sent: err.requestSent,
+      };
     }
     if (ok) {
       failures.set(deviceId, 0);

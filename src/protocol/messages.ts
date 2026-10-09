@@ -51,6 +51,7 @@ export interface TipAdjustPayload {
 
 export interface BatchClosePayload {
   device_id: string;
+  closeout_id?: string;
 }
 
 export interface PingPayload {
@@ -119,7 +120,16 @@ export interface RequestMessage {
   payload: CommandPayload;
 }
 
+export interface CommandDiagnostics {
+  elapsed_ms: number;
+  connect_ms?: number;
+  response_ms?: number;
+  transport_code?: string;
+  request_sent?: boolean;
+}
+
 export interface ResponseSuccess {
+  diagnostics?: CommandDiagnostics;
   type: 'response';
   id: string;
   success: true;
@@ -127,6 +137,7 @@ export interface ResponseSuccess {
 }
 
 export interface ResponseError {
+  diagnostics?: CommandDiagnostics;
   type: 'response';
   id: string;
   success: false;
@@ -161,6 +172,7 @@ export interface HeartbeatMessage {
 
 /** What the agent last saw of one terminal. */
 export interface TerminalStatus extends DeviceAddress {
+  diagnostics?: CommandDiagnostics;
   reachable: boolean;
   serial?: string;
   model?: string;
@@ -195,14 +207,30 @@ export interface ReplayAckMessage {
   external_id: string;
 }
 
+export interface BatchResultReplayMessage {
+  type: 'batch_result_replay';
+  closeout_id: string;
+  request_id: string;
+  device_id: string;
+  response: ResponseMessage;
+  completed_at: string;
+}
+
+export interface BatchReplayAckMessage {
+  type: 'batch_replay_ack';
+  closeout_id: string;
+  request_id: string;
+}
+
 export type AgentMessage =
   | HelloMessage
   | LogMessage
   | HeartbeatMessage
   | ResponseMessage
   | TerminalStatusMessage
-  | SaleResultReplayMessage;
-export type ServerMessage = RequestMessage | HeartbeatMessage | ReplayAckMessage;
+  | SaleResultReplayMessage
+  | BatchResultReplayMessage;
+export type ServerMessage = RequestMessage | HeartbeatMessage | ReplayAckMessage | BatchReplayAckMessage;
 
 /** Stable error codes returned to the cloud caller. */
 export const ERROR_CODES = {

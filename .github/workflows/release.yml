@@ -21,6 +21,10 @@ on:
       - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
+      publish:
+        description: 'Publish installers to the CDN after successful builds'
+        type: boolean
+        default: false
       force:
         description: 'Republish even if this version already exists on the CDN'
         type: boolean
@@ -70,9 +74,16 @@ jobs:
           REGION: ${{ secrets.DO_SPACES_REGION }}
           VERSION: ${{ steps.version.outputs.value }}
           FORCE: ${{ inputs.force }}
+          PUBLISH: ${{ inputs.publish }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           case "$ENDPOINT" in http://*|https://*) ;; *) ENDPOINT="https://$ENDPOINT" ;; esac
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$PUBLISH" != "true" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Build-only run; installers will be saved as Actions artifacts"
+            exit 0
+          fi
           # `aws s3 ls` exits 1 when the prefix has no objects — the normal case
           # for a new version — which pipefail turned into a failed release.
           existing=$({ aws s3 ls "s3://$BUCKET/pax-agent/v$VERSION/" \

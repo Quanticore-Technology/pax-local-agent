@@ -133,3 +133,11 @@ See `src/protocol/messages.ts` (vendored from `nail-salon-api/src/modules/pax-ag
 | Connects but never answers | `Protocol Type` is not `HTTP GET` in ECR Comm Settings |
 | `POSLINK_ERROR` errors | Terminal replied with a malformed packet — check the BroadPOS log at `sdcard/Android/data/<broadpos.package>/files/broadpos_logYYYYMMDD.log` |
 | Service installed but not running | Open `services.msc`, find `GoNailsPaxAgent`, click Start; check Event Viewer for crash details |
+
+### Batch-close recovery
+
+With an API that supplies `closeout_id`, the agent saves an intent before sending B00 and attempts to save its response before sending it to the cloud. If saving the result fails, it still sends the in-memory result; after a restart, the saved intent remains unconfirmed. Results are replayed after reconnect and every 30 seconds until `batch_replay_ack`; a socket write alone is not acknowledgement. Replaying a result never sends another terminal command. A repeated closeout ID returns its recorded outcome, including an unconfirmed outcome after a crash during settlement.
+
+Batch journals live beside the config, scoped to the office and agent identity. Keep them when upgrading: they prevent an old closeout request from closing a later batch. An unreadable journal blocks new identified batch commands while other agent operations remain available. Legacy API requests without `closeout_id` retain their existing behavior and have no durable batch recovery. Deploy the supporting API before upgrading agents. This cannot recover responses already lost by older agents.
+
+Batch responses and failed terminal probes include elapsed time, TCP connect time, HTTP response-header time (when available), transport error code and `request_sent`. The latter indicates TCP connection establishment, not proof of terminal processing. The existing 118-second terminal timeout is unchanged and is an HTTP inactivity timeout. None of these diagnostics identifies processor-side delays or proves settlement; obtain the terminal/processor report for unresolved outcomes.

@@ -17,7 +17,7 @@
  */
 import http from 'http';
 import { getLogger } from './logger';
-import type { PaxResult } from './protocol/messages';
+import type { CommandDiagnostics, PaxResult } from './protocol/messages';
 import {
   PacketGroup,
   ParsedResponse,
@@ -81,6 +81,7 @@ export interface PaxClientOptions {
   port: number;
   /** Request timeout (ms). */
   timeoutMs: number;
+  diagnostics?: Partial<CommandDiagnostics>;
 }
 
 /**
@@ -120,7 +121,7 @@ export async function sendCommand(
  * Before the socket connected the terminal never saw the command; after, a
  * sale may be charging the card right now, so "try again" would be wrong.
  */
-export type TransportError = Error & { code?: string; requestSent?: boolean };
+export type TransportError = Error & { code?: string; requestSent?: boolean; diagnostics?: Partial<CommandDiagnostics> };
 
 /** Issue the GET and collect the raw response bytes. */
 function httpGet(opts: PaxClientOptions, query: string): Promise<Buffer> {
@@ -128,6 +129,9 @@ function httpGet(opts: PaxClientOptions, query: string): Promise<Buffer> {
     const chunks: Buffer[] = [];
     let settled = false;
     let sent = false;
+    const startedAt = Date.now();
+    let connectMs: number | undefined;
+    let responseMs: number | undefined;
 
     const request = http.request(
       {
@@ -142,25 +146,30 @@ function httpGet(opts: PaxClientOptions, query: string): Promise<Buffer> {
         agent: false,
       },
       (response) => {
+        responseMs = Date.now() - startedAt;
+        response.on('error', fail);
+        response.on('aborted', () => fail(Object.assign(new Error('Terminal response aborted'), { code: 'ECONNRESET' })));
         response.on('data', (chunk: Buffer) => chunks.push(chunk));
         response.on('end', () => {
           if (settled) return;
           settled = true;
+          if (opts.diagnostics) Object.assign(opts.diagnostics, { connect_ms: connectMs, response_ms: responseMs, request_sent: sent });
           resolve(Buffer.concat(chunks));
         });
       },
     );
-    request.on('socket', (socket) => socket.once('connect', () => (sent = true)));
+    request.on('socket', (socket) => socket.once('connect', () => { sent = true; connectMs = Date.now() - startedAt; }));
 
     const fail = (err: TransportError): void => {
       if (settled) return;
       settled = true;
       err.requestSent = sent;
+      err.diagnostics = { connect_ms: connectMs, response_ms: responseMs };
       request.destroy();
       reject(err);
     };
 
-    request.on('timeout', () => fail(new Error(`PAX request timed out after ${opts.timeoutMs}ms`)));
+    request.on('timeout', () => fail(Object.assign(new Error(`PAX request timed out after ${opts.timeoutMs}ms`), { code: 'ETIMEDOUT' })));
     request.on('error', fail);
     request.end();
   });
