@@ -35,7 +35,7 @@ permissions:
 
 # Serialize publication; build-only validation never writes CDN keys.
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish && format('agent-build-{0}', github.run_id) || 'agent-release' }}
+  group: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish && format('agent-build-{0}', github.run_id) || 'agent-publish' }}
   cancel-in-progress: false
 
 jobs:
