@@ -9,6 +9,7 @@ import {
   RequestMessage,
   ResponseMessage,
   CancelPayload,
+  PrintPayload,
   SalePayload,
   SetDevicesPayload,
   SetDevicesResult,
@@ -24,7 +25,7 @@ import { handleBatchClose } from './commands/batch-close';
 import { handlePing } from './commands/ping';
 import { handleCancel } from './commands/cancel';
 import { handleSetDevices } from './commands/set-devices';
-import { printReceipt } from './commands/print-receipt';
+import { buildLines, printData, printReceipt } from './commands/print-receipt';
 import type { TransportError } from './pax-client';
 
 const logger = getLogger();
@@ -60,6 +61,8 @@ export interface DispatchContext {
 const SALE_BUDGET_MS = 178_000;
 const PRINT_MAX_MS = 15_000;
 const PRINT_MIN_MS = 3_000;
+/** A receipt is a few dozen lines; anything far longer is not one. */
+const MAX_PRINT_LINES = 120;
 
 /**
  * How long a command may wait for the terminal. The API's own timeouts are
@@ -230,6 +233,28 @@ async function runCommand(
         };
       }
       return handleCancel(device);
+    }
+    case 'pax.print': {
+      const { lines } = msg.payload as PrintPayload;
+      if (!Array.isArray(lines) || !lines.length || lines.length > MAX_PRINT_LINES ||
+          !lines.every((l) => l && typeof l.left === 'string' && (l.right === undefined || typeof l.right === 'string'))) {
+        throw new CommandError(ERROR_CODES.PROTOCOL_ERROR, 'Invalid print payload');
+      }
+      return queued(async (d) => {
+        const printed = await printData(d, buildLines(lines), PRINT_MAX_MS);
+        return {
+          result_code: printed.receipt_printed ? SUCCESS_CODE : 'PRINT_FAILED',
+          result_text: printed.receipt_error ?? '',
+          ref_num: '',
+          auth_code: '',
+          card_type: '',
+          last_four: '',
+          approved_amount_cents: 0,
+          tip_amount_cents: 0,
+          raw_response: {},
+          ...printed,
+        };
+      });
     }
     default:
       throw new CommandError(ERROR_CODES.PROTOCOL_ERROR, `Unknown command: ${msg.command}`);

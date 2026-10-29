@@ -17,6 +17,8 @@ export type PaxCommand =
   | 'pax.batch_close'
   | 'pax.ping'
   | 'pax.cancel'
+  /** Print text on the terminal's printer (e.g. a cash receipt). Old agents answer PROTOCOL_ERROR. */
+  | 'pax.print'
   /** Not a terminal command: rewrites the agent's terminal addresses. Old agents answer PROTOCOL_ERROR. */
   | 'config.set_devices';
 
@@ -64,6 +66,17 @@ export interface CancelPayload {
   external_id?: string;
 }
 
+/** One printed line: `left` alone, or `left` with `right` aligned to the right edge. */
+export interface PrintLine {
+  left: string;
+  right?: string;
+}
+
+export interface PrintPayload {
+  device_id: string;
+  lines: PrintLine[];
+}
+
 /** One terminal address on the salon LAN. */
 export interface DeviceAddress {
   device_id: string;
@@ -88,6 +101,7 @@ export type CommandPayload =
   | BatchClosePayload
   | PingPayload
   | CancelPayload
+  | PrintPayload
   | SetDevicesPayload;
 
 /** Sanitized fields the agent extracts from POSLink responses (no PAN/CVV). */

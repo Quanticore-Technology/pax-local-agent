@@ -2,7 +2,7 @@ import { sendCommand } from '../pax-client';
 import { getLogger } from '../logger';
 import { COMMAND, SUCCESS_CODE, subField } from '../poslink-protocol';
 import type { DeviceEntry } from '../config';
-import type { PaxResult, SalePayload } from '../protocol/messages';
+import type { PaxResult, PrintLine, SalePayload } from '../protocol/messages';
 
 const logger = getLogger();
 
@@ -23,11 +23,20 @@ export async function printReceipt(
   timeoutMs: number,
   now: Date = new Date(),
 ): Promise<{ receipt_printed: boolean; receipt_error?: string }> {
+  return printData(device, buildReceipt(payload, result, now), timeoutMs);
+}
+
+/** Send PrintData to the terminal (A60). Never throws. */
+export async function printData(
+  device: DeviceEntry,
+  data: string,
+  timeoutMs: number,
+): Promise<{ receipt_printed: boolean; receipt_error?: string }> {
   try {
     const parsed = await sendCommand(
       { ip: device.ip, port: device.port, timeoutMs },
       COMMAND.PRINT,
-      ['', buildReceipt(payload, result, now)],
+      ['', data],
     );
     const code = subField(parsed, 3, 0);
     if (code === SUCCESS_CODE) return { receipt_printed: true };
@@ -40,6 +49,16 @@ export async function printReceipt(
     logger.warn({ error }, 'receipt not printed');
     return { receipt_printed: false, receipt_error: error };
   }
+}
+
+/** Lines the API laid out (a cash receipt): text left, or label left and value right. */
+export function buildLines(lines: PrintLine[]): string {
+  const out = lines.map((l) => {
+    const left = clean(l.left);
+    if (l.right !== undefined) return row(left, clean(l.right));
+    return left ? `\\L${left}` : '';
+  });
+  return out.join('\n') + '\n';
 }
 
 export function buildReceipt(payload: SalePayload, result: PaxResult, now: Date): string {
