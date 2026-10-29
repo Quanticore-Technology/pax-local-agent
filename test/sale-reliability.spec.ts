@@ -194,6 +194,47 @@ describe('receipts, card brand and EMV', () => {
     expect(result.receipt_error).toBe('100032 OUT OF PAPER');
   });
 
+  it('prints the lines pax.print sends (a cash receipt)', async () => {
+    const mock = await startPoslinkMock();
+    const res = await dispatch(configFor(mock, 'p4'), {
+      type: 'request',
+      id: 'cash',
+      command: 'pax.print',
+      payload: { device_id: 'p4', lines: [{ left: 'Tiệm Nail Đẹp' }, { left: '' }, { left: 'Total', right: '$40.00' }] },
+    });
+    await mock.close();
+    expect(res.success).toBe(true);
+    const result = (res as { result: PaxResult }).result;
+    expect(result.result_code).toBe('000000');
+    expect(result.receipt_printed).toBe(true);
+    const print = mock.received.find((r) => r.command === COMMAND.PRINT)!;
+    expect(print.fields[3]).toBe('\\LTiem Nail Dep\n\n\\LTotal\\R$40.00\n');
+  });
+
+  it('answers pax.print out of paper as a failed print, not an error', async () => {
+    const mock = await startPoslinkMock({
+      override: { A60: buildMockResponse(['0', 'A60', PROTOCOL_VERSION, '100032', 'OUT OF PAPER']) },
+    });
+    const res = await dispatch(configFor(mock, 'p5'), {
+      type: 'request', id: 'cash2', command: 'pax.print', payload: { device_id: 'p5', lines: [{ left: 'x' }] },
+    });
+    await mock.close();
+    const result = (res as { result: PaxResult }).result;
+    expect(result.result_code).toBe('PRINT_FAILED');
+    expect(result.receipt_error).toBe('100032 OUT OF PAPER');
+  });
+
+  it('refuses a pax.print without lines', async () => {
+    const mock = await startPoslinkMock();
+    const res = await dispatch(configFor(mock, 'p6'), {
+      type: 'request', id: 'bad', command: 'pax.print', payload: { device_id: 'p6', lines: [] },
+    });
+    await mock.close();
+    expect(res.success).toBe(false);
+    expect((res as { error: { code: string } }).error.code).toBe(ERROR_CODES.PROTOCOL_ERROR);
+    expect(mock.received).toHaveLength(0);
+  });
+
   it('does not print unless asked', async () => {
     const mock = await startPoslinkMock();
     const res = await dispatch(configFor(mock, 'p3'), sale('noprint', 'p3'));
