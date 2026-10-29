@@ -91,6 +91,9 @@ curl http://127.0.0.1:9876/health
   `pax.cancel` skips the queue (secondary port); given an `external_id` it only
   aborts that sale (otherwise result_code `NOT_RUNNING`). `pax.ping` answers `DEVICE_BUSY`
   while a real command runs.
+- **`pax.print`** prints lines the API laid out (a cash receipt): `{ left }` for
+  text, `{ left, right }` for a label with a right-aligned value. A printer
+  error (e.g. out of paper) is result_code `PRINT_FAILED`, not a command error.
 - **Unknown outcome.** A timeout or reset after a sale/void/refund/tip adjust/
   batch close reached the terminal is `TERMINAL_NO_RESPONSE`, not
   `DEVICE_UNREACHABLE`: the card may have been charged, so check before retrying.
