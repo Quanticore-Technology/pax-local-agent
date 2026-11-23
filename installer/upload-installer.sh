@@ -84,7 +84,7 @@ case "$target" in
   mac|all)
     PKG_FILE="$AGENT_DIR/installer/macos/dist/$PKG_NAME"
     if [ ! -f "$PKG_FILE" ]; then
-      echo "ERROR: $PKG_FILE not built. Run: ENV_LABEL=$ENV_LABEL BOOTSTRAP_URL=... yarn installer:macos"
+      echo "ERROR: $PKG_FILE not built. Run: ENV_LABEL=$ENV_LABEL BOOTSTRAP_URL=... pnpm installer:macos"
       exit 1
     fi
     echo "==> Uploading macOS .pkg env=$ENV_LABEL ($(du -h "$PKG_FILE" | cut -f1))"

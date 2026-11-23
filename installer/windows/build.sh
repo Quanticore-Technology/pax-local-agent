@@ -52,10 +52,10 @@ mkdir -p "$STAGING_DIR/scripts" "$DIST_DIR" "$NSSM_CACHE"
 # 1. Compile TS + bundle Node + agent into a single Windows .exe
 # ---------------------------------------------------------------------------
 echo "==> Compiling TypeScript"
-npm run build >/dev/null
+pnpm run build >/dev/null
 
 echo "==> Bundling Node binary (node20-win-x64) via @yao-pkg/pkg"
-npx --yes @yao-pkg/pkg dist/index.js \
+pnpm exec pkg dist/index.js \
   --targets node20-win-x64 \
   --output  "$STAGING_DIR/pax-agent.exe" \
   --compress GZip >/dev/null

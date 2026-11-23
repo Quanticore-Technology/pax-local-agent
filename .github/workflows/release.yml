@@ -18,6 +18,8 @@ on:
       - 'test/**'
       - 'installer/**'
       - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
       - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
@@ -101,13 +103,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
-      - run: npx tsc --noEmit
-      - run: npx jest
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsc --noEmit
+      - run: pnpm test
 
   windows:
     name: Windows installer (${{ matrix.env.label }})
@@ -119,11 +122,12 @@ jobs:
         env: ${{ fromJSON(needs.meta.outputs.envs) }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
 
       # build.sh compiles the .iss only when `iscc` is on PATH; otherwise it
       # stages the payload and exits successfully, which would silently produce
@@ -163,11 +167,12 @@ jobs:
         env: ${{ fromJSON(needs.meta.outputs.envs) }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-      - run: npm ci
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
 
       - name: Build
         env:

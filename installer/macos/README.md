@@ -23,8 +23,8 @@ Requires macOS host (Apple-signed `pkgbuild` / `productbuild` are macOS-only).
 
 ```bash
 cd agents/pax-agent
-yarn install
-yarn installer:macos
+pnpm install --frozen-lockfile
+pnpm installer:macos
 # → installer/macos/dist/GoNailsPaxAgent-<version>.pkg
 ```
 
@@ -122,7 +122,7 @@ with public-read ACL + immutable cache headers.
 ```bash
 brew install awscli   # one-time
 cd agents/pax-agent
-yarn installer:macos          # build the .pkg
+pnpm installer:macos          # build the .pkg
 bash installer/upload-installer.sh mac
 ```
 
