@@ -1,5 +1,6 @@
 {
   "name": "@gonails/pax-agent",
+  "packageManager": "pnpm@10.32.1",
   "version": "0.6.0",
   "description": "On-prem relay agent: cloud backend → local PAX A920 over POSLink",
   "private": true,
@@ -14,9 +15,9 @@
     "setup": "ts-node src/index.ts setup",
     "test": "jest",
     "lint": "eslint \"src/**/*.ts\"",
-    "pkg:macos:arm64": "yarn build && yao-pkg dist/index.js --targets node20-macos-arm64 --output installer/macos/dist/pax-agent",
-    "pkg:macos:x64": "yarn build && yao-pkg dist/index.js --targets node20-macos-x64   --output installer/macos/dist/pax-agent-x64",
-    "pkg:win:x64": "yarn build && yao-pkg dist/index.js --targets node20-win-x64     --output installer/windows/build/staging/pax-agent.exe",
+    "pkg:macos:arm64": "pnpm run build && pkg dist/index.js --targets node20-macos-arm64 --output installer/macos/dist/pax-agent",
+    "pkg:macos:x64": "pnpm run build && pkg dist/index.js --targets node20-macos-x64   --output installer/macos/dist/pax-agent-x64",
+    "pkg:win:x64": "pnpm run build && pkg dist/index.js --targets node20-win-x64     --output installer/windows/build/staging/pax-agent.exe",
     "installer:macos": "bash installer/macos/build.sh",
     "installer:windows": "bash installer/windows/build.sh"
   },

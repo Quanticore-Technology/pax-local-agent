@@ -4,7 +4,7 @@
 # Output: installer/macos/dist/GoNailsPaxAgent-<version>.pkg
 #
 # Steps:
-#   1. tsc → dist/  (npm run build)
+#   1. tsc → dist/  (pnpm run build)
 #   2. pkg → arm64 + x64 binaries, kept intact behind an architecture-selecting launcher
 #   3. pkgbuild → component .pkg (binary + plist + scripts)
 #   4. productbuild → distribution .pkg (welcome/conclusion + version metadata)
@@ -50,12 +50,12 @@ mkdir -p "$DIST_DIR" "$ROOT_DIR/usr/local/bin" \
          "$ROOT_DIR/Applications"
 
 echo "==> Compiling TypeScript"
-npm run build >/dev/null
+pnpm run build >/dev/null
 
 echo "==> Bundling Node binaries (arm64 + x64) via @yao-pkg/pkg"
 BIN_DIR="$ROOT_DIR/usr/local/libexec/pax-agent"
 for slice in arm64 x64; do
-  npx --yes @yao-pkg/pkg dist/index.js \
+  pnpm exec pkg dist/index.js \
     --targets "node20-macos-${slice}" \
     --output "$BIN_DIR/pax-agent-${slice}" \
     --compress GZip >/dev/null

@@ -34,7 +34,7 @@ directly. See [`src/poslink-protocol.ts`](src/poslink-protocol.ts).
 
 The salon never sees a token, UUID, or URL — just a single 6-char code.
 
-Build the installer locally: `yarn installer:macos`. See
+Build the installer locally: `pnpm installer:macos`. See
 [`installer/macos/README.md`](installer/macos/README.md) for full build / sign /
 distribute notes.
 
@@ -47,7 +47,7 @@ implementation.
 
 ```bash
 cd agents/pax-agent
-npm install
+pnpm install --frozen-lockfile
 mkdir -p ~/.config/nail-salon-pax-agent
 cat > ~/.config/nail-salon-pax-agent/config.json <<'JSON'
 {
@@ -60,7 +60,7 @@ cat > ~/.config/nail-salon-pax-agent/config.json <<'JSON'
   ]
 }
 JSON
-npm run dev
+pnpm dev
 ```
 
 ## Verify
